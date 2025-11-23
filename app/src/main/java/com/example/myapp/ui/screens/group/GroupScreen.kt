@@ -17,6 +17,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -24,10 +25,11 @@ import java.text.NumberFormat
 import java.util.Locale
 import com.example.myapp.ui.components.CommonTopBar
 import com.example.myapp.R
-import com.example.myapp.ui.data.api.RetrofitClient // API 클라이언트
+import com.example.myapp.ui.data.api.RetrofitClient
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.async
 
-// UI용 데이터 모델 (API 응답을 이 형태로 변환해서 사용)
+// UI용 데이터 모델
 data class MateUser(
     val id: Int,
     val name: String,
@@ -41,76 +43,89 @@ fun GroupScreen() {
     var selectedTab by remember { mutableStateOf(0) } // 0: 그룹, 1: 팔로잉
     var selectedUser by remember { mutableStateOf<MateUser?>(null) }
 
-    // ★ 서버 데이터 상태 관리
+    // 서버 데이터 상태
     var groupList by remember { mutableStateOf<List<MateUser>>(emptyList()) }
     var followingList by remember { mutableStateOf<List<MateUser>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
 
     val coroutineScope = rememberCoroutineScope()
+    val context = LocalContext.current
 
-    // ★ 화면 진입 시 API 데이터 로딩
-    LaunchedEffect(Unit) {
-        try {
-            // 그룹 멤버 조회 API 호출
-            val response = RetrofitClient.api.getGroupMembers()
-            if (response.isSuccessful && response.body() != null) {
-                val apiMembers = response.body()!!
-
-                // API 모델 -> UI 모델 변환
-                val mappedUsers = apiMembers.map { member ->
-                    MateUser(
-                        id = member.userId,
-                        name = member.nick,
-                        spentAmount = member.spendAmount,
-                        momPercent = member.growthRate.toInt(),
-                        isFollowing = member.isFollowing
-                    )
-                }
-
-                groupList = mappedUsers
-                // 팔로잉 목록은 그룹 목록 중 팔로우한 사람만 필터링 (임시 로직)
-                // 실제로는 팔로잉 목록 API (/social/following)를 따로 호출하는 것이 정확함
-                followingList = mappedUsers.filter { it.isFollowing }
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-        } finally {
-            isLoading = false
-        }
-    }
-
-    // 팔로우 토글 함수 (서버 통신)
-    fun toggleFollow(user: MateUser) {
+    // ★ 데이터 로딩 함수
+    fun loadData() {
         coroutineScope.launch {
+            isLoading = true
             try {
-                // 1. UI 선반영 (Optimistic Update) - 반응 속도를 위해
-                val updatedFollowingState = !user.isFollowing
+                RetrofitClient.initToken(context)
 
-                // 리스트 업데이트 (불변성 유지하며 교체)
-                groupList = groupList.map {
-                    if (it.id == user.id) it.copy(isFollowing = updatedFollowingState) else it
+                // 1. API 동시 호출
+                val groupDeferred = async { RetrofitClient.api.getGroupMembers() }
+                val followingDeferred = async { RetrofitClient.api.getFollowings() }
+
+                val groupRes = groupDeferred.await()
+                val followingRes = followingDeferred.await()
+
+                // 2. 그룹 멤버 데이터 처리 (★ 안전한 변환 적용)
+                val fetchedGroupUsers = if (groupRes.isSuccessful && groupRes.body() != null) {
+                    groupRes.body()!!.map { member ->
+                        MateUser(
+                            id = member.userId,
+                            // ★ 값이 없으면(null) "알 수 없음"이나 0으로 대체
+                            name = member.nick ?: "알 수 없음",
+                            spentAmount = member.spendAmount ?: 0,
+                            momPercent = member.growthRate?.toInt() ?: 0,
+                            isFollowing = member.isFollowing
+                        )
+                    }
+                } else {
+                    emptyList()
                 }
-                followingList = groupList.filter { it.isFollowing }
+                groupList = fetchedGroupUsers
 
-                // 팝업 유저 상태도 업데이트
-                if (selectedUser?.id == user.id) {
-                    selectedUser = selectedUser!!.copy(isFollowing = updatedFollowingState)
+                // 3. 팔로잉 데이터 처리 (★ 안전한 변환 적용)
+                if (followingRes.isSuccessful && followingRes.body() != null) {
+                    followingList = followingRes.body()!!.map { socialUser ->
+                        val existingInGroup = fetchedGroupUsers.find { it.id == socialUser.userId }
+
+                        existingInGroup ?: MateUser(
+                            id = socialUser.userId,
+                            name = socialUser.nick ?: "알 수 없음", // ★ 안전 처리
+                            spentAmount = 0,
+                            momPercent = 0,
+                            isFollowing = true
+                        )
+                    }
+                } else {
+                    followingList = emptyList()
                 }
-
-                // 2. 서버 요청 (비동기)
-                // API 문서: POST /social/follow { "targetId": 55 }
-                RetrofitClient.api.followUser(mapOf("targetId" to user.id))
 
             } catch (e: Exception) {
                 e.printStackTrace()
-                // 실패 시 롤백 로직이 필요할 수 있음
+            } finally {
+                isLoading = false
+            }
+        }
+    }
+
+    // 화면 진입 시 로딩
+    LaunchedEffect(Unit) {
+        loadData()
+    }
+
+    // 팔로우 토글 함수
+    fun toggleFollow(user: MateUser) {
+        coroutineScope.launch {
+            try {
+                RetrofitClient.api.followUser(mapOf("targetId" to user.id))
+                loadData()
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
         }
     }
 
     val displayList = if (selectedTab == 0) groupList else followingList
 
-    // 팝업
     if (selectedUser != null) {
         UserDetailPopup(
             user = selectedUser!!,
@@ -193,7 +208,6 @@ fun MateItemCard(
             .padding(16.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // 프로필 아이콘
         Box(
             modifier = Modifier.size(60.dp).clip(CircleShape).background(Color(0xFFF0F0F0)),
             contentAlignment = Alignment.Center
