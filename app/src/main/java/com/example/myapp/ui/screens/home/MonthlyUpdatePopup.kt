@@ -58,7 +58,7 @@ fun MonthlyUpdatePopup(
         }
 
         for (i in 0 until 4) {
-            delay(2500)
+            delay(1800)
             step++
         }
     }

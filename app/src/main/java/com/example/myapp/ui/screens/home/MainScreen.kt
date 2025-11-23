@@ -278,7 +278,7 @@ fun CategoryRowItem(item: CategoryExpense, totalAmount: Int) {
 fun getCategoryDisplayName(category: String): String {
     return when (category.uppercase()) {
         "FOOD" -> "식비"
-        "TRANSPORT" -> "교통"
+        "TRANSPORT","TRAFFIC" -> "교통"
         "SHOPPING" -> "쇼핑"
         "HEALTH", "MEDICAL" -> "의료/건강"
         "CULTURE" -> "문화/여가"

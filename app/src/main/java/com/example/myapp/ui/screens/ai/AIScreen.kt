@@ -29,9 +29,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.myapp.ui.components.CommonTopBar
 import com.example.myapp.R
-import com.example.myapp.ui.data.api.ChatRequest
-import com.example.myapp.ui.data.api.ReportRequest
-import com.example.myapp.ui.data.api.RetrofitClient
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -49,42 +47,32 @@ fun AIScreen() {
     var inputText by remember { mutableStateOf("") }
     var isReportExpanded by remember { mutableStateOf(false) }
 
-    // ★ AI 리포트 텍스트 상태
-    var reportText by remember { mutableStateOf("리포트를 생성 중입니다...") }
+    // ★ 하드코딩된 리포트 내용
+    val reportText = """
+        [10월 소비 패턴 분석]
+        
+        지난달은 '식비' 지출이 가장 많았습니다. (전체 45%)
+        배달 음식 이용 횟수가 전월 대비 3회 증가했어요.
+        
+        💡 AI의 제안:
+        이번 달은 외식 횟수를 주 1회로 줄이고, 
+        '문화/여가' 예산을 10% 늘려보시는 건 어떨까요?
+        목표 달성까지 15만원 남았습니다!
+    """.trimIndent()
 
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
-    val context = LocalContext.current
     val mainBlue = Color(0xFF002CCE)
 
-    // 사용자 ID 가져오기
-    val sharedPref = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
-    val userId = sharedPref.getInt("user_id", 1) // 기본값 1
-
-    // ★ 초기화 및 리포트 로딩
+    // ★ 초기화 및 시나리오 시작
     LaunchedEffect(Unit) {
-        // 1. 토큰 초기화 (안전장치)
-        RetrofitClient.initToken(context)
-
-        // 2. 웰컴 메시지
         if (messages.isEmpty()) {
-            messages.add(ChatMessage("안녕하세요! 저는 당신의 금융 AI 메이트입니다. 무엇을 도와드릴까요?", false, getCurrentTime()))
-        }
-
-        // 3. 리포트 생성 API 호출
-        try {
-            val response = RetrofitClient.api.generateReport(ReportRequest(user_id = userId))
-            if (response.isSuccessful && response.body() != null) {
-                reportText = response.body()!!.report_text
-            } else {
-                reportText = "리포트 생성에 실패했습니다. 잠시 후 다시 시도해주세요."
-            }
-        } catch (e: Exception) {
-            reportText = "네트워크 오류가 발생했습니다."
-            e.printStackTrace()
+            // 1. 첫 인사 및 질문 (하드코딩)
+            messages.add(ChatMessage("안녕하세요! 당신의 금융 AI 메이트입니다.\n이번 달 목표 저축액이나 소득 목표는 얼마인가요?", false, getCurrentTime()))
         }
     }
 
+    // 메시지 추가 시 자동 스크롤
     LaunchedEffect(messages.size) {
         if (messages.isNotEmpty()) {
             listState.animateScrollToItem(messages.size - 1)
@@ -139,7 +127,7 @@ fun AIScreen() {
                 Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp)) {
                     Divider(color = Color.LightGray, thickness = 1.dp)
                     Spacer(modifier = Modifier.height(16.dp))
-                    // ★ 실제 서버에서 받은 리포트 텍스트 표시
+                    // ★ 하드코딩된 리포트 텍스트 표시
                     Text(
                         text = reportText,
                         fontSize = 15.sp,
@@ -171,24 +159,17 @@ fun AIScreen() {
             onValueChange = { inputText = it },
             onSendClick = {
                 if (inputText.isNotBlank()) {
-                    val userMsg = inputText
-                    messages.add(ChatMessage(userMsg, true, getCurrentTime()))
+                    // 1. 사용자 메시지 추가
+                    messages.add(ChatMessage(inputText, true, getCurrentTime()))
                     inputText = ""
 
-                    // ★ 채팅 API 호출
+                    // 2. AI 답변 시뮬레이션 (하드코딩)
                     coroutineScope.launch {
-                        try {
-                            val response = RetrofitClient.api.chatWithAI(ChatRequest(user_id = userId, message = userMsg))
-                            if (response.isSuccessful && response.body() != null) {
-                                val aiReply = response.body()!!.reply
-                                messages.add(ChatMessage(aiReply, false, getCurrentTime()))
-                            } else {
-                                messages.add(ChatMessage("죄송합니다. 오류가 발생했습니다.", false, getCurrentTime()))
-                            }
-                        } catch (e: Exception) {
-                            messages.add(ChatMessage("네트워크 오류가 발생했습니다.", false, getCurrentTime()))
-                            e.printStackTrace()
-                        }
+                        delay(1000) // 1초 딜레이 (생각하는 척)
+
+                        // ★ 무조건 응원 메시지 전송
+                        val aiReply = "목표를 확인했습니다. \n저와 함께 소비 습관을 관리해서 꼭 달성해봐요! 화이팅! 💪"
+                        messages.add(ChatMessage(aiReply, false, getCurrentTime()))
                     }
                 }
             },
