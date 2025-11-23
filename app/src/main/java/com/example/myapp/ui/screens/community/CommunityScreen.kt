@@ -1,5 +1,6 @@
 package com.example.myapp.ui.screens.community
 
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -14,17 +15,22 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import com.example.myapp.ui.components.CommonTopBar
+import com.example.myapp.R
+import com.example.myapp.ui.data.api.CreatePostRequest
+import com.example.myapp.ui.data.api.RetrofitClient
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import com.example.myapp.ui.components.CommonTopBar
-import com.example.myapp.R
 
+// UI용 데이터 모델 (API 응답과 매핑)
 data class CommunityPost(
     val id: Int,
     val title: String,
@@ -38,13 +44,49 @@ data class CommunityPost(
 fun CommunityScreen(
     onPostClick: (Int) -> Unit
 ) {
-    val posts = remember { mutableStateListOf(
-        CommunityPost(1, "이번 달 식비 줄이는 꿀팁 공유해요", "도시락 싸 다니니까 확실히 많이 줄어드네요. 다들 어떻게 하시나요?", "알뜰살뜰", "20만원 그룹", "09.22"),
-        CommunityPost(2, "편의점 신상 드셔보신 분?", "이번에 나온 도시락 가성비 괜찮은가요? 점심으로 먹을까 고민중입니다.", "먹깨비", "30만원 그룹", "09.21"),
-        CommunityPost(3, "무지출 챌린지 3일차 성공!", "오늘도 커피 유혹을 이겨냈습니다. 뿌듯하네요.", "짠테크", "10만원 그룹", "09.20"),
-    ) }
-
+    // ★ 서버 데이터 상태
+    var posts by remember { mutableStateOf<List<CommunityPost>>(emptyList()) }
+    var isLoading by remember { mutableStateOf(true) }
     var showWriteDialog by remember { mutableStateOf(false) }
+
+    val coroutineScope = rememberCoroutineScope()
+    val context = LocalContext.current // ★ Toast 및 토큰용 Context
+
+    // 데이터 로딩 함수
+    fun loadPosts() {
+        coroutineScope.launch {
+            isLoading = true
+            try {
+                val response = RetrofitClient.api.getPosts()
+                if (response.isSuccessful && response.body() != null) {
+                    // API 데이터 -> UI 데이터 변환
+                    posts = response.body()!!.map { apiPost ->
+                        CommunityPost(
+                            id = apiPost.id,
+                            title = apiPost.title,
+                            content = apiPost.content ?: "",
+                            author = apiPost.writer,
+                            group = "핀메이트",
+                            date = apiPost.createdAt.take(10)
+                        )
+                    }
+                } else {
+                    // 목록 로드 실패 시 조용히 넘어가거나 로그
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            } finally {
+                isLoading = false
+            }
+        }
+    }
+
+    // 초기 로딩
+    LaunchedEffect(Unit) {
+        // ★ [중요] 화면 진입 시 저장된 토큰을 불러와서 세팅함
+        RetrofitClient.initToken(context)
+        loadPosts()
+    }
 
     Box(
         modifier = Modifier
@@ -54,13 +96,19 @@ fun CommunityScreen(
         Column(modifier = Modifier.fillMaxSize()) {
             CommonTopBar(titleImageId = R.drawable.community_text)
 
-            LazyColumn(modifier = Modifier.weight(1f)) {
-                items(posts.reversed()) { post ->
-                    PostItem(
-                        post = post,
-                        onClick = { onPostClick(post.id) }
-                    )
-                    HorizontalDivider(thickness = 1.dp, color = Color(0x4D000000))
+            if (isLoading) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = Color(0xFF002CCE))
+                }
+            } else {
+                LazyColumn(modifier = Modifier.weight(1f)) {
+                    items(posts) { post ->
+                        PostItem(
+                            post = post,
+                            onClick = { onPostClick(post.id) }
+                        )
+                        HorizontalDivider(thickness = 1.dp, color = Color(0x4D000000))
+                    }
                 }
             }
         }
@@ -80,16 +128,25 @@ fun CommunityScreen(
         WritePostDialog(
             onDismiss = { showWriteDialog = false },
             onConfirm = { title, content ->
-                val newPost = CommunityPost(
-                    id = posts.size + 1,
-                    title = title,
-                    content = content,
-                    author = "나(사용자)",
-                    group = "20만원 그룹",
-                    date = SimpleDateFormat("MM.dd", Locale.US).format(Date())
-                )
-                posts.add(newPost)
-                showWriteDialog = false
+                // ★ 글 작성 API 호출
+                coroutineScope.launch {
+                    try {
+                        val response = RetrofitClient.api.createPost(CreatePostRequest(title, content))
+
+                        if (response.isSuccessful) {
+                            Toast.makeText(context, "글이 등록되었습니다.", Toast.LENGTH_SHORT).show()
+                            showWriteDialog = false
+                            loadPosts() // 작성 후 목록 새로고침
+                        } else {
+                            // ★ 에러 원인 출력 (예: 401 Unauthorized 등)
+                            val errorMsg = response.errorBody()?.string() ?: "알 수 없는 오류"
+                            Toast.makeText(context, "작성 실패(${response.code()}): $errorMsg", Toast.LENGTH_LONG).show()
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                        Toast.makeText(context, "네트워크 오류: ${e.message}", Toast.LENGTH_LONG).show()
+                    }
+                }
             }
         )
     }
@@ -97,7 +154,6 @@ fun CommunityScreen(
 
 @Composable
 fun PostItem(post: CommunityPost, onClick: () -> Unit) {
-    // ★ 파란색 정의
     val mainBlue = Color(0xFF002CCE)
 
     Column(
@@ -109,7 +165,6 @@ fun PostItem(post: CommunityPost, onClick: () -> Unit) {
         Text(text = post.title, fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.Black, modifier = Modifier.padding(bottom = 4.dp))
         Text(text = post.content, fontSize = 16.sp, color = Color.Black, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(bottom = 12.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
-            // ★ 작성자 닉네임 색상 변경: mainBlue
             Text(text = post.author, fontSize = 14.sp, color = mainBlue)
             Spacer(modifier = Modifier.width(8.dp))
             Box(modifier = Modifier.width(1.dp).height(12.dp).background(Color(0xFF7D7D7D)))
@@ -141,7 +196,7 @@ fun WritePostDialog(onDismiss: () -> Unit, onConfirm: (String, String) -> Unit) 
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                     TextButton(onClick = onDismiss) { Text("취소", color = Color.Gray) }
                     Spacer(modifier = Modifier.width(8.dp))
-                    Button(onClick = { if (title.isNotBlank() && content.isNotBlank()) onConfirm(title, content) }, colors = ButtonDefaults.buttonColors(containerColor = Color.Black)) { Text("등록") }
+                    Button(onClick = { if (title.isNotBlank() && content.isNotBlank()) onConfirm(title, content) }, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF002CCE))) { Text("등록") }
                 }
             }
         }

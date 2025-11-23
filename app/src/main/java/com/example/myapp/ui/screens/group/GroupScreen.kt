@@ -22,37 +22,100 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.text.NumberFormat
 import java.util.Locale
-import com.example.myapp.ui.data.MockData
 import com.example.myapp.ui.components.CommonTopBar
 import com.example.myapp.R
+import com.example.myapp.ui.data.api.RetrofitClient // API 클라이언트
+import kotlinx.coroutines.launch
 
+// UI용 데이터 모델 (API 응답을 이 형태로 변환해서 사용)
 data class MateUser(
     val id: Int,
     val name: String,
     val spentAmount: Int,
     val momPercent: Int,
-    var isFollowing: Boolean = false
+    var isFollowing: Boolean
 )
 
 @Composable
 fun GroupScreen() {
-    var selectedTab by remember { mutableStateOf(0) }
+    var selectedTab by remember { mutableStateOf(0) } // 0: 그룹, 1: 팔로잉
     var selectedUser by remember { mutableStateOf<MateUser?>(null) }
 
-    val groupList = MockData.groupUsers
-    val followingList = MockData.followings
+    // ★ 서버 데이터 상태 관리
+    var groupList by remember { mutableStateOf<List<MateUser>>(emptyList()) }
+    var followingList by remember { mutableStateOf<List<MateUser>>(emptyList()) }
+    var isLoading by remember { mutableStateOf(true) }
+
+    val coroutineScope = rememberCoroutineScope()
+
+    // ★ 화면 진입 시 API 데이터 로딩
+    LaunchedEffect(Unit) {
+        try {
+            // 그룹 멤버 조회 API 호출
+            val response = RetrofitClient.api.getGroupMembers()
+            if (response.isSuccessful && response.body() != null) {
+                val apiMembers = response.body()!!
+
+                // API 모델 -> UI 모델 변환
+                val mappedUsers = apiMembers.map { member ->
+                    MateUser(
+                        id = member.userId,
+                        name = member.nick,
+                        spentAmount = member.spendAmount,
+                        momPercent = member.growthRate.toInt(),
+                        isFollowing = member.isFollowing
+                    )
+                }
+
+                groupList = mappedUsers
+                // 팔로잉 목록은 그룹 목록 중 팔로우한 사람만 필터링 (임시 로직)
+                // 실제로는 팔로잉 목록 API (/social/following)를 따로 호출하는 것이 정확함
+                followingList = mappedUsers.filter { it.isFollowing }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        } finally {
+            isLoading = false
+        }
+    }
+
+    // 팔로우 토글 함수 (서버 통신)
+    fun toggleFollow(user: MateUser) {
+        coroutineScope.launch {
+            try {
+                // 1. UI 선반영 (Optimistic Update) - 반응 속도를 위해
+                val updatedFollowingState = !user.isFollowing
+
+                // 리스트 업데이트 (불변성 유지하며 교체)
+                groupList = groupList.map {
+                    if (it.id == user.id) it.copy(isFollowing = updatedFollowingState) else it
+                }
+                followingList = groupList.filter { it.isFollowing }
+
+                // 팝업 유저 상태도 업데이트
+                if (selectedUser?.id == user.id) {
+                    selectedUser = selectedUser!!.copy(isFollowing = updatedFollowingState)
+                }
+
+                // 2. 서버 요청 (비동기)
+                // API 문서: POST /social/follow { "targetId": 55 }
+                RetrofitClient.api.followUser(mapOf("targetId" to user.id))
+
+            } catch (e: Exception) {
+                e.printStackTrace()
+                // 실패 시 롤백 로직이 필요할 수 있음
+            }
+        }
+    }
+
     val displayList = if (selectedTab == 0) groupList else followingList
 
+    // 팝업
     if (selectedUser != null) {
-        val realTimeIsFollowing = MockData.isFollowing(selectedUser!!.id)
-        val userWithState = selectedUser!!.copy(isFollowing = realTimeIsFollowing)
-
         UserDetailPopup(
-            user = userWithState,
+            user = selectedUser!!,
             onDismiss = { selectedUser = null },
-            onFollowToggle = {
-                MockData.toggleFollow(selectedUser!!)
-            }
+            onFollowToggle = { toggleFollow(selectedUser!!) }
         )
     }
 
@@ -72,21 +135,23 @@ fun GroupScreen() {
             GroupTabButton("팔로잉", selectedTab == 1) { selectedTab = 1 }
         }
 
-        LazyColumn(
-            modifier = Modifier.weight(1f),
-            contentPadding = PaddingValues(horizontal = 24.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            items(displayList) { user ->
-                val isActuallyFollowing = MockData.isFollowing(user.id)
-
-                MateItemCard(
-                    user = user.copy(isFollowing = isActuallyFollowing),
-                    onItemClick = { selectedUser = user },
-                    onFollowClick = {
-                        MockData.toggleFollow(user)
-                    }
-                )
+        if (isLoading) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = Color(0xFF002CCE))
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier.weight(1f),
+                contentPadding = PaddingValues(horizontal = 24.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                items(displayList) { user ->
+                    MateItemCard(
+                        user = user,
+                        onItemClick = { selectedUser = user },
+                        onFollowClick = { toggleFollow(user) }
+                    )
+                }
             }
         }
     }
@@ -117,7 +182,7 @@ fun MateItemCard(
 ) {
     val formattedSpent = NumberFormat.getNumberInstance(Locale.KOREA).format(user.spentAmount)
     val momText = if (user.momPercent >= 0) "+${user.momPercent}%" else "${user.momPercent}%"
-    val mainBlue = Color(0xFF002CCE) // ★ 파란색 정의
+    val mainBlue = Color(0xFF002CCE)
 
     Row(
         modifier = Modifier
@@ -136,7 +201,7 @@ fun MateItemCard(
             Icon(
                 Icons.Default.Person,
                 contentDescription = null,
-                tint = mainBlue, // ★ 아이콘 색상 변경: 파란색
+                tint = mainBlue,
                 modifier = Modifier.size(40.dp)
             )
         }
@@ -151,18 +216,14 @@ fun MateItemCard(
         }
 
         Column(horizontalAlignment = Alignment.End) {
-            // ★ 팔로우 버튼 (흰 배경에 어울리도록 스타일 적용)
             OutlinedButton(
                 onClick = onFollowClick,
                 modifier = Modifier.height(32.dp),
                 contentPadding = PaddingValues(horizontal = 12.dp),
-                // 팔로잉: 파란 테두리 / 팔로우: 테두리 없음(채움)
                 border = if (user.isFollowing) BorderStroke(1.dp, mainBlue) else null,
                 shape = RoundedCornerShape(8.dp),
                 colors = ButtonDefaults.outlinedButtonColors(
-                    // 팔로잉: 흰 배경 / 팔로우: 파란 배경
                     containerColor = if (user.isFollowing) Color.White else mainBlue,
-                    // 팔로잉: 파란 글씨 / 팔로우: 흰 글씨
                     contentColor = if (user.isFollowing) mainBlue else Color.White
                 )
             ) {

@@ -24,11 +24,13 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.myapp.ui.data.api.RetrofitClient
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-// --- 댓글 데이터 모델 ---
+// --- 댓글 데이터 모델 (UI용) ---
 data class Comment(
     val id: Int,
     val author: String,
@@ -41,46 +43,66 @@ fun PostDetailScreen(
     postId: Int,
     onBackClick: () -> Unit
 ) {
-    val postTitle = "게시글 $postId 의 제목입니다"
-    val postContent = "여기는 게시글의 상세 내용이 들어갑니다.\n사용자가 작성한 긴 글을 모두 볼 수 있습니다.\n\n줄바꿈도 잘 적용되는지 확인해봅니다."
-    val postAuthor = "작성자$postId"
-    val postDate = "09.22 14:30"
+    // 상태 변수들
+    var postTitle by remember { mutableStateOf("로딩 중...") }
+    var postContent by remember { mutableStateOf("") }
+    var postAuthor by remember { mutableStateOf("") }
+    var postDate by remember { mutableStateOf("") }
 
     var isLiked by remember { mutableStateOf(false) }
-    var likeCount by remember { mutableStateOf(12) }
+    var likeCount by remember { mutableStateOf(0) }
 
-    val comments = remember { mutableStateListOf(
-        Comment(1, "댓글러1", "좋은 정보 감사합니다!", "09.22 14:35"),
-        Comment(2, "댓글러2", "저도 도전해봐야겠네요.", "09.22 15:00")
-    ) }
+    // 댓글 리스트
+    var comments = remember { mutableStateListOf<Comment>() }
 
     var commentInput by remember { mutableStateOf("") }
-
-    // ★ 앱 테마 파란색 정의
     val mainBlue = Color(0xFF002CCE)
+    val coroutineScope = rememberCoroutineScope()
+
+    // ★ 서버에서 상세 정보 로딩
+    LaunchedEffect(postId) {
+        try {
+            val response = RetrofitClient.api.getPostDetail(postId)
+            if (response.isSuccessful && response.body() != null) {
+                val data = response.body()!!
+                postTitle = data.title
+                postContent = data.content ?: ""
+                postAuthor = data.writer
+                postDate = data.createdAt.take(10)
+                likeCount = data.like
+                // 댓글 매핑 (API 응답에는 날짜/ID가 없으므로 임시값 처리)
+                if (data.comments != null) {
+                    data.comments.forEachIndexed { index, commentRes ->
+                        comments.add(Comment(index, commentRes.user, commentRes.text, "최근"))
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            postTitle = "글을 불러오지 못했습니다."
+        }
+    }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.White)
     ) {
-        // --- 상단 바 (수정됨) ---
+        // --- 상단 바 ---
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(mainBlue) // ★ 배경색: 파란색
+                .background(mainBlue)
                 .padding(vertical = 16.dp),
             contentAlignment = Alignment.CenterStart
         ) {
             IconButton(onClick = onBackClick) {
-                // ★ 아이콘 색상: 흰색
                 Icon(Icons.Default.ArrowBack, contentDescription = "뒤로가기", tint = Color.White)
             }
             Text(
                 text = "게시글 상세",
                 fontSize = 18.sp,
                 fontWeight = FontWeight.Bold,
-                color = Color.White, // ★ 텍스트 색상: 흰색
+                color = Color.White,
                 modifier = Modifier.align(Alignment.Center)
             )
         }
@@ -116,7 +138,7 @@ fun PostDetailScreen(
                     )
                     Spacer(modifier = Modifier.height(32.dp))
 
-                    // 좋아요 버튼
+                    // 좋아요 버튼 (기능은 UI 상에서만 동작하도록 둠)
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -177,6 +199,8 @@ fun PostDetailScreen(
             IconButton(
                 onClick = {
                     if (commentInput.isNotBlank()) {
+                        // 댓글 작성 API가 있다면 여기서 호출
+                        // 현재는 로컬 리스트에만 추가
                         comments.add(
                             Comment(
                                 id = comments.size + 1,
@@ -189,7 +213,6 @@ fun PostDetailScreen(
                     }
                 }
             ) {
-                // ★ 전송 아이콘 색상 수정: 입력값이 있으면 파란색(mainBlue)
                 Icon(
                     Icons.Default.Send,
                     contentDescription = "등록",

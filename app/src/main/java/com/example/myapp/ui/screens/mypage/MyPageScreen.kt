@@ -1,5 +1,6 @@
 package com.example.myapp.ui.screens.mypage
 
+import android.content.Context
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -16,13 +17,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.myapp.ui.data.MockData
 import com.example.myapp.ui.components.CommonTopBar
 import com.example.myapp.R
+import com.example.myapp.ui.data.api.RetrofitClient
+import kotlinx.coroutines.launch
 
 data class MyPost(
     val id: Int,
@@ -37,15 +40,50 @@ fun MyPageScreen(
     onFollowerClick: () -> Unit,
     onFollowingClick: () -> Unit
 ) {
-    val userName = MockData.myName
-    val followerCount = MockData.followers.size
-    val followingCount = MockData.followings.size
+    // 상태 변수
+    var userName by remember { mutableStateOf("로딩중...") }
+    var followerCount by remember { mutableIntStateOf(0) }
+    var followingCount by remember { mutableIntStateOf(0) }
+    var myPosts by remember { mutableStateOf<List<MyPost>>(emptyList()) }
+    var isLoading by remember { mutableStateOf(true) }
 
-    val myPosts = remember { mutableStateListOf(
-        MyPost(1, "글제목 입니다.", "내용 미리보기 입니다\n두줄까지 보이게 하면 좋지 않을...", "2024.09.22"),
-        MyPost(2, "무지출 챌린지 성공 후기", "일주일 동안 커피값 아껴서 3만원 모았습니다.", "2024.09.20"),
-        MyPost(3, "편의점 도시락 추천", "이번 신상 진짜 맛있네요. 가격도 저렴하고...", "2024.09.18")
-    ) }
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+
+    // ★ API 데이터 로딩
+    LaunchedEffect(Unit) {
+        RetrofitClient.initToken(context) // 토큰 초기화 확인
+        try {
+            // 1. 프로필 정보 가져오기
+            val profileRes = RetrofitClient.api.getProfile()
+            if (profileRes.isSuccessful && profileRes.body() != null) {
+                val profile = profileRes.body()!!
+                userName = profile.nick
+                followerCount = profile.counts.follower
+                followingCount = profile.counts.following
+            }
+
+            // 2. 내 글 목록 가져오기 (전체 글 조회 후 내 닉네임으로 필터링)
+            val postsRes = RetrofitClient.api.getPosts()
+            if (postsRes.isSuccessful && postsRes.body() != null) {
+                val allPosts = postsRes.body()!!
+                // 내 닉네임과 작성자가 같은 글만 필터링
+                myPosts = allPosts.filter { it.writer == userName }.map { apiPost ->
+                    MyPost(
+                        id = apiPost.id,
+                        title = apiPost.title,
+                        content = apiPost.content ?: "",
+                        date = apiPost.createdAt.take(10)
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            userName = "오류 발생"
+        } finally {
+            isLoading = false
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -54,29 +92,47 @@ fun MyPageScreen(
     ) {
         CommonTopBar(titleImageId = R.drawable.my_text)
 
-        LazyColumn(modifier = Modifier.weight(1f), contentPadding = PaddingValues(bottom = 20.dp)) {
-            item {
-                ProfileSection(
-                    name = userName,
-                    followers = followerCount,
-                    followings = followingCount,
-                    onFollowerClick = onFollowerClick,
-                    onFollowingClick = onFollowingClick
-                )
-                HorizontalDivider(thickness = 1.dp, color = Color.Black.copy(alpha = 0.1f))
+        if (isLoading) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = Color(0xFF002CCE))
             }
-            item {
-                Row(modifier = Modifier.fillMaxWidth().padding(top = 24.dp, bottom = 16.dp, start = 24.dp, end = 24.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text("내가 쓴 글", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.Black)
+        } else {
+            LazyColumn(modifier = Modifier.weight(1f), contentPadding = PaddingValues(bottom = 20.dp)) {
+                item {
+                    ProfileSection(
+                        name = userName,
+                        followers = followerCount,
+                        followings = followingCount,
+                        onFollowerClick = onFollowerClick,
+                        onFollowingClick = onFollowingClick
+                    )
+                    HorizontalDivider(thickness = 1.dp, color = Color.Black.copy(alpha = 0.1f))
                 }
-            }
-            items(myPosts) { post ->
-                MyPostItem(
-                    post = post,
-                    onClick = { onPostClick(post.id) },
-                    onDeleteClick = { myPosts.remove(post) }
-                )
-                Spacer(modifier = Modifier.height(16.dp))
+                item {
+                    Row(modifier = Modifier.fillMaxWidth().padding(top = 24.dp, bottom = 16.dp, start = 24.dp, end = 24.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text("내가 쓴 글", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.Black)
+                    }
+                }
+
+                if (myPosts.isEmpty()) {
+                    item {
+                        Box(modifier = Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+                            Text("작성한 글이 없습니다.", color = Color.Gray)
+                        }
+                    }
+                } else {
+                    items(myPosts) { post ->
+                        MyPostItem(
+                            post = post,
+                            onClick = { onPostClick(post.id) },
+                            onDeleteClick = {
+                                // 실제 삭제 API가 있다면 여기서 호출
+                                // myPosts = myPosts.filter { it.id != post.id }
+                            }
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                    }
+                }
             }
         }
     }
@@ -135,19 +191,17 @@ fun MyPostItem(
     onDeleteClick: () -> Unit
 ) {
     val mainBlue = Color(0xFF002CCE)
-    // ★ 요청하신 새로운 배경색 (연한 파랑)
     val itemBackgroundColor = Color(0xFF6D8EEC)
 
     Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
         Column(modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp)) // 전체 둥글게
-            .background(itemBackgroundColor) // ★ 배경색 변경 (6D8EEC)
+            .clip(RoundedCornerShape(10.dp))
+            .background(itemBackgroundColor)
             .clickable { onClick() }
             .padding(16.dp)
         ) {
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Top) {
-                // ★ 제목 색상 변경: 흰색
                 Text(text = post.title, fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.White, modifier = Modifier.weight(1f))
 
                 Row(
@@ -156,15 +210,12 @@ fun MyPostItem(
                         .padding(4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // ★ 삭제 아이콘 및 텍스트 색상 변경: 기존 파란색 (002CCE)
                     Icon(Icons.Default.Delete, contentDescription = "삭제", modifier = Modifier.size(14.dp), tint = mainBlue)
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(text = "삭제하기", fontSize = 12.sp, color = mainBlue, fontWeight = FontWeight.Bold)
                 }
             }
             Spacer(modifier = Modifier.height(8.dp))
-
-            // ★ 내용 텍스트 색상 변경: 흰색
             Text(text = post.content, fontSize = 16.sp, color = Color.White, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Spacer(modifier = Modifier.height(12.dp))
         }

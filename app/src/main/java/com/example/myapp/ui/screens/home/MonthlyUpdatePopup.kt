@@ -20,7 +20,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.example.myapp.ui.data.api.RetrofitClient
 import kotlinx.coroutines.delay
+import java.text.NumberFormat
+import java.util.Calendar
+import java.util.Locale
 
 @Composable
 fun MonthlyUpdatePopup(
@@ -29,7 +33,37 @@ fun MonthlyUpdatePopup(
 ) {
     var step by remember { mutableIntStateOf(0) }
 
+    // ★ 지난달 총 소비 금액 상태
+    var lastMonthTotal by remember { mutableIntStateOf(0) }
+    var isLoading by remember { mutableStateOf(true) }
+
+    // 1. 애니메이션 및 API 데이터 로딩
     LaunchedEffect(Unit) {
+        // (1) 지난달 날짜 계산 (예: 현재 5월 -> "202504")
+        val calendar = Calendar.getInstance()
+        calendar.add(Calendar.MONTH, -1)
+        val year = calendar.get(Calendar.YEAR)
+        val month = calendar.get(Calendar.MONTH) + 1
+        val dateStr = String.format("%04d%02d", year, month)
+
+        // (2) API 호출 (비동기)
+        try {
+            // TODO: 나중에 [새 그룹 배정 API]가 완성되면 여기서 호출하여 그룹 정보를 갱신하면 됩니다.
+            // val groupRes = RetrofitClient.api.assignNewGroup()
+
+            val response = RetrofitClient.api.getTransactions(date = dateStr)
+            if (response.isSuccessful && response.body() != null) {
+                val list = response.body()!!.content
+                // 지출(WITHDRAW)만 합산
+                lastMonthTotal = list.filter { it.type == "WITHDRAW" }.sumOf { it.amt }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        } finally {
+            isLoading = false
+        }
+
+        // (3) 단계 진행 애니메이션
         for (i in 0 until 4) {
             delay(2500)
             step++
@@ -70,10 +104,11 @@ fun MonthlyUpdatePopup(
                     ) {
                         when (currentStep) {
                             0 -> Step0_Updated()
-                            1 -> Step1_Amount()
-                            2 -> Step2_Detail1()
-                            3 -> Step3_Detail2()
-                            4 -> Step3_Detail2()
+                            // ★ API로 받아온 금액 전달
+                            1 -> Step1_Amount(lastMonthTotal)
+                            2 -> Step2_Detail1(lastMonthTotal)
+                            3 -> Step3_Detail2(lastMonthTotal)
+                            4 -> Step3_Detail2(lastMonthTotal)
                         }
                     }
                 }
@@ -137,20 +172,22 @@ fun Step0_Updated() {
 }
 
 @Composable
-fun Step1_Amount() {
+fun Step1_Amount(amount: Int) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Text("지난 달 소비 총 금액", color = Color.White, fontSize = 16.sp)
         Spacer(modifier = Modifier.height(4.dp))
-        Text("349,302원", color = Color.White, fontSize = 48.sp, fontWeight = FontWeight.ExtraBold)
+        // ★ 실제 데이터 표시
+        Text("${formatPopupMoney(amount)}원", color = Color.White, fontSize = 48.sp, fontWeight = FontWeight.ExtraBold)
     }
 }
 
 @Composable
-fun Step2_Detail1() {
+fun Step2_Detail1(amount: Int) {
     Column(horizontalAlignment = Alignment.Start, modifier = Modifier.fillMaxWidth()) {
         Text("지난 달 소비 총 금액", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Medium)
         Spacer(modifier = Modifier.height(0.dp))
-        Text("349,302원", color = Color.White, fontSize = 40.sp, fontWeight = FontWeight.Bold)
+        // ★ 실제 데이터 표시
+        Text("${formatPopupMoney(amount)}원", color = Color.White, fontSize = 40.sp, fontWeight = FontWeight.Bold)
 
         Spacer(modifier = Modifier.height(20.dp))
 
@@ -158,17 +195,18 @@ fun Step2_Detail1() {
             text = "당신의 그룹에서 지난 달 어떤 소비를 했는지\n카테고리별로 확인할 수 있어요.",
             color = Color.White.copy(alpha = 0.9f),
             fontSize = 15.sp,
-            lineHeight = 18.sp // ★ 줄간격 축소: 20.sp -> 18.sp
+            lineHeight = 18.sp
         )
     }
 }
 
 @Composable
-fun Step3_Detail2() {
+fun Step3_Detail2(amount: Int) {
     Column(horizontalAlignment = Alignment.Start, modifier = Modifier.fillMaxWidth()) {
         Text("지난 달 소비 총 금액", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Medium)
         Spacer(modifier = Modifier.height(0.dp))
-        Text("349,302원", color = Color.White, fontSize = 40.sp, fontWeight = FontWeight.Bold)
+        // ★ 실제 데이터 표시
+        Text("${formatPopupMoney(amount)}원", color = Color.White, fontSize = 40.sp, fontWeight = FontWeight.Bold)
 
         Spacer(modifier = Modifier.height(20.dp))
 
@@ -176,14 +214,19 @@ fun Step3_Detail2() {
             text = "당신의 그룹에서 지난 달 어떤 소비를 했는지\n카테고리별로 확인할 수 있어요.",
             color = Color.White.copy(alpha = 0.9f),
             fontSize = 15.sp,
-            lineHeight = 18.sp // ★ 줄간격 축소: 20.sp -> 18.sp
+            lineHeight = 18.sp
         )
         Spacer(modifier = Modifier.height(12.dp))
         Text(
             text = "이번 달에는 어떤 소비를 하는지 실시간으로\n확인하며 소비 습관을 잘 가꿔보세요.",
             color = Color.White.copy(alpha = 0.9f),
             fontSize = 15.sp,
-            lineHeight = 18.sp // ★ 줄간격 축소: 20.sp -> 18.sp
+            lineHeight = 18.sp
         )
     }
+}
+
+// 금액 포맷팅 함수 (내부 사용)
+fun formatPopupMoney(amount: Int): String {
+    return NumberFormat.getNumberInstance(Locale.KOREA).format(amount)
 }

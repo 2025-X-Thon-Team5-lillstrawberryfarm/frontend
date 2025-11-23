@@ -1,5 +1,6 @@
 package com.example.myapp.ui.screens.ai
 
+import android.content.Context
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -21,17 +22,20 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import kotlinx.coroutines.delay
+import com.example.myapp.ui.components.CommonTopBar
+import com.example.myapp.R
+import com.example.myapp.ui.data.api.ChatRequest
+import com.example.myapp.ui.data.api.ReportRequest
+import com.example.myapp.ui.data.api.RetrofitClient
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import com.example.myapp.ui.components.CommonTopBar // ★ 공통 헤더 Import
-import com.example.myapp.R
 
 data class ChatMessage(
     val text: String,
@@ -44,14 +48,40 @@ fun AIScreen() {
     val messages = remember { mutableStateListOf<ChatMessage>() }
     var inputText by remember { mutableStateOf("") }
     var isReportExpanded by remember { mutableStateOf(false) }
+
+    // ★ AI 리포트 텍스트 상태
+    var reportText by remember { mutableStateOf("리포트를 생성 중입니다...") }
+
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
-
+    val context = LocalContext.current
     val mainBlue = Color(0xFF002CCE)
 
+    // 사용자 ID 가져오기
+    val sharedPref = context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+    val userId = sharedPref.getInt("user_id", 1) // 기본값 1
+
+    // ★ 초기화 및 리포트 로딩
     LaunchedEffect(Unit) {
+        // 1. 토큰 초기화 (안전장치)
+        RetrofitClient.initToken(context)
+
+        // 2. 웰컴 메시지
         if (messages.isEmpty()) {
             messages.add(ChatMessage("안녕하세요! 저는 당신의 금융 AI 메이트입니다. 무엇을 도와드릴까요?", false, getCurrentTime()))
+        }
+
+        // 3. 리포트 생성 API 호출
+        try {
+            val response = RetrofitClient.api.generateReport(ReportRequest(user_id = userId))
+            if (response.isSuccessful && response.body() != null) {
+                reportText = response.body()!!.report_text
+            } else {
+                reportText = "리포트 생성에 실패했습니다. 잠시 후 다시 시도해주세요."
+            }
+        } catch (e: Exception) {
+            reportText = "네트워크 오류가 발생했습니다."
+            e.printStackTrace()
         }
     }
 
@@ -66,7 +96,6 @@ fun AIScreen() {
             .fillMaxSize()
             .background(Color(0xFFF9F9F9))
     ) {
-        // ★ 헤더 교체: AI 메이트 텍스트 이미지
         CommonTopBar(titleImageId = R.drawable.ai_text)
 
         // AI 리포트 토글
@@ -89,25 +118,14 @@ fun AIScreen() {
                         imageVector = Icons.Default.Description,
                         contentDescription = "Report Icon",
                         tint = Color(0xFF888888),
-                        modifier = Modifier
-                            .size(18.dp)
-                            .offset(y = 1.dp)
+                        modifier = Modifier.size(18.dp).offset(y = 1.dp)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "월간 소비 분석 리포트",
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.Black
-                    )
+                    Text("월간 소비 분석 리포트", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.Black)
                 }
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = if (isReportExpanded) "접기" else "보기",
-                        fontSize = 12.sp,
-                        color = Color.Gray
-                    )
+                    Text(text = if (isReportExpanded) "접기" else "보기", fontSize = 12.sp, color = Color.Gray)
                     Spacer(modifier = Modifier.width(4.dp))
                     Icon(
                         imageVector = if (isReportExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
@@ -121,14 +139,9 @@ fun AIScreen() {
                 Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp)) {
                     Divider(color = Color.LightGray, thickness = 1.dp)
                     Spacer(modifier = Modifier.height(16.dp))
+                    // ★ 실제 서버에서 받은 리포트 텍스트 표시
                     Text(
-                        text = "당신은 소비구간 (XX만원~YY만원) 구간에 속해있습니다.\n" +
-                                "지난 달 당신의 소비습관을 분석해본다면 ...\n" +
-                                "현재 소비습관을 지난달과 비교해본다면...\n\n" +
-                                "당신이 설정한 목표치에 가깝게 제안하고자 하는 바는 ...\n\n" +
-                                "블라블라블라블라블라\n\n" +
-                                "뭐시기뭐시기\n\n" +
-                                "아몰랑아몰랑\n",
+                        text = reportText,
                         fontSize = 15.sp,
                         color = Color.Black,
                         lineHeight = 22.sp
@@ -158,14 +171,24 @@ fun AIScreen() {
             onValueChange = { inputText = it },
             onSendClick = {
                 if (inputText.isNotBlank()) {
-                    messages.add(ChatMessage(inputText, true, getCurrentTime()))
-                    val userQuestion = inputText
+                    val userMsg = inputText
+                    messages.add(ChatMessage(userMsg, true, getCurrentTime()))
                     inputText = ""
 
+                    // ★ 채팅 API 호출
                     coroutineScope.launch {
-                        delay(1000)
-                        val aiResponse = getMockAiResponse(userQuestion)
-                        messages.add(ChatMessage(aiResponse, false, getCurrentTime()))
+                        try {
+                            val response = RetrofitClient.api.chatWithAI(ChatRequest(user_id = userId, message = userMsg))
+                            if (response.isSuccessful && response.body() != null) {
+                                val aiReply = response.body()!!.reply
+                                messages.add(ChatMessage(aiReply, false, getCurrentTime()))
+                            } else {
+                                messages.add(ChatMessage("죄송합니다. 오류가 발생했습니다.", false, getCurrentTime()))
+                            }
+                        } catch (e: Exception) {
+                            messages.add(ChatMessage("네트워크 오류가 발생했습니다.", false, getCurrentTime()))
+                            e.printStackTrace()
+                        }
                     }
                 }
             },
@@ -191,9 +214,7 @@ fun ChatBubble(message: ChatMessage) {
             modifier = Modifier
                 .widthIn(max = 280.dp)
                 .clip(RoundedCornerShape(16.dp))
-                .background(
-                    if (message.isUser) Color(0xFF002CCE) else Color(0xFFE1E1E1)
-                )
+                .background(if (message.isUser) Color(0xFF002CCE) else Color(0xFFE1E1E1))
                 .padding(horizontal = 16.dp, vertical = 12.dp)
         ) {
             Text(
@@ -249,13 +270,4 @@ fun ChatInputBar(
 fun getCurrentTime(): String {
     val sdf = SimpleDateFormat("h:mm a", Locale.US)
     return sdf.format(Date())
-}
-
-fun getMockAiResponse(question: String): String {
-    return when {
-        question.contains("안녕") -> "안녕하세요! 오늘 기분은 어떠신가요?"
-        question.contains("소비") || question.contains("돈") -> "이번 달 소비 내역을 분석해 드릴까요?"
-        question.contains("추천") -> "사용자님의 패턴에 맞는 예금 상품이 있습니다."
-        else -> "죄송합니다. 아직 배우는 중이라 잘 모르겠어요. 다시 말씀해 주시겠어요?"
-    }
 }

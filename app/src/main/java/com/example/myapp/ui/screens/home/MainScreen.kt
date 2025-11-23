@@ -13,12 +13,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowUp
-import androidx.compose.material.icons.filled.ShoppingCart
-import androidx.compose.material.icons.filled.DirectionsCar
-import androidx.compose.material.icons.filled.Restaurant
-import androidx.compose.material.icons.filled.LocalCafe
+import androidx.compose.material.icons.filled.* // 모든 아이콘 사용
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -33,12 +28,16 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.myapp.R
+import com.example.myapp.ui.data.api.RetrofitClient
+import com.example.myapp.ui.data.api.TransactionDetail
+import com.example.myapp.ui.data.api.UserProfileResponse
+import kotlinx.coroutines.launch
 import java.text.NumberFormat
 import java.util.Calendar
 import java.util.Locale
-import com.example.myapp.R // ★ 리소스 사용을 위해 추가
 
-// --- 데이터 모델 ---
+// --- 데이터 모델 (UI용) ---
 data class CategoryExpense(
     val name: String,
     val amount: Int,
@@ -46,13 +45,12 @@ data class CategoryExpense(
     val color: Color
 )
 
-data class DailyTransaction(
+data class DailySummary(
     val day: Int,
-    val income: Int = 0,
-    val expense: Int = 0
+    val income: Int,
+    val expense: Int
 )
 
-// ★ 전역 변수: 앱이 실행되어 있는 동안 팝업을 봤는지 체크
 private var hasShownPopupInSession = false
 
 @Composable
@@ -60,40 +58,75 @@ fun MainScreen(
     onNavigateToGroup: () -> Unit = {}
 ) {
     val scrollState = rememberScrollState()
-    val totalExpense = 1097951
+    val context = LocalContext.current
+
+    // 1. 날짜 상태 관리
+    var currentYear by remember { mutableIntStateOf(Calendar.getInstance().get(Calendar.YEAR)) }
+    var currentMonth by remember { mutableIntStateOf(Calendar.getInstance().get(Calendar.MONTH) + 1) }
+
+    // 2. 데이터 상태 관리
+    var userProfile by remember { mutableStateOf<UserProfileResponse?>(null) }
+    var transactionList by remember { mutableStateOf<List<TransactionDetail>>(emptyList()) }
+    var isLoading by remember { mutableStateOf(true) }
+
+    // 3. 집계된 데이터 (자동 계산)
+    val totalExpense = transactionList.filter { it.type == "WITHDRAW" }.sumOf { it.amt }
+
+    val dailyMap = remember(transactionList) {
+        transactionList.groupBy {
+            it.date.split(".").last().toIntOrNull() ?: 0
+        }.mapValues { (_, list) ->
+            DailySummary(
+                day = 0,
+                income = list.filter { it.type == "DEPOSIT" }.sumOf { it.amt },
+                expense = list.filter { it.type == "WITHDRAW" }.sumOf { it.amt }
+            )
+        }
+    }
+
+    val categoryStats = remember(transactionList) {
+        transactionList.filter { it.type == "WITHDRAW" }
+            // ★ 핵심 수정: 영문 카테고리 코드를 한글로 변환하여 그룹화
+            .groupBy { getCategoryDisplayName(it.category) }
+            .map { (koreanName, list) ->
+                CategoryExpense(
+                    name = koreanName,
+                    amount = list.sumOf { it.amt },
+                    // 한글 이름으로 아이콘과 색상 가져오기
+                    icon = getCategoryIcon(koreanName),
+                    color = getCategoryColor(koreanName)
+                )
+            }.sortedByDescending { it.amount }
+    }
+
+    // 4. 데이터 로딩
+    LaunchedEffect(currentYear, currentMonth) {
+        isLoading = true
+        try {
+            if (userProfile == null) {
+                val profileRes = RetrofitClient.api.getProfile()
+                if (profileRes.isSuccessful) userProfile = profileRes.body()
+            }
+
+            val dateStr = String.format("%04d%02d", currentYear, currentMonth)
+            val transRes = RetrofitClient.api.getTransactions(date = dateStr)
+            if (transRes.isSuccessful) {
+                transactionList = transRes.body()?.content ?: emptyList()
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        } finally {
+            isLoading = false
+        }
+    }
 
     var showMonthlyPopup by remember { mutableStateOf(!hasShownPopupInSession) }
-
-    val categoryList = listOf(
-        CategoryExpense("식비", 450000, Icons.Default.Restaurant, Color(0xFFFF8A80)),
-        CategoryExpense("교통", 120000, Icons.Default.DirectionsCar, Color(0xFF80D8FF)),
-        CategoryExpense("쇼핑", 300000, Icons.Default.ShoppingCart, Color(0xFFA5D6A7)),
-        CategoryExpense("카페", 50000, Icons.Default.LocalCafe, Color(0xFFFFCC80)),
-    )
-
-    val calendarData = listOf(
-        DailyTransaction(1, expense = 15000),
-        DailyTransaction(5, income = 2500000, expense = 50000),
-        DailyTransaction(8, expense = 32000),
-        DailyTransaction(12, expense = 12000),
-        DailyTransaction(15, income = 50000),
-        DailyTransaction(22, expense = 120000),
-        DailyTransaction(25, expense = 8500),
-    ).associateBy { it.day }
-
     var isExpanded by remember { mutableStateOf(false) }
 
     if (showMonthlyPopup) {
         MonthlyUpdatePopup(
-            onDismiss = {
-                showMonthlyPopup = false
-                hasShownPopupInSession = true
-            },
-            onConfirm = {
-                showMonthlyPopup = false
-                hasShownPopupInSession = true
-                onNavigateToGroup()
-            }
+            onDismiss = { showMonthlyPopup = false; hasShownPopupInSession = true },
+            onConfirm = { showMonthlyPopup = false; hasShownPopupInSession = true; onNavigateToGroup() }
         )
     }
 
@@ -103,46 +136,46 @@ fun MainScreen(
             .background(Color(0xFFF9F9F9))
             .verticalScroll(scrollState)
     ) {
-        // ★ [신규] 우측 상단 로고 배치
         Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 20.dp, end = 24.dp), // 상단, 우측 여백
+            modifier = Modifier.fillMaxWidth().padding(top = 20.dp, end = 24.dp),
             contentAlignment = Alignment.CenterEnd
         ) {
-            Image(
-                painter = painterResource(id = R.drawable.blue_logo),
-                contentDescription = "App Logo",
-                modifier = Modifier.height(24.dp) // 로고 크기
-            )
+            Image(painter = painterResource(id = R.drawable.blue_logo), contentDescription = "App Logo", modifier = Modifier.height(24.dp))
         }
 
-        // 1. 상단 정보 (로고가 생겼으므로 상단 패딩을 줄임)
-        TopSection(totalExpense)
+        TopSection(
+            userName = userProfile?.nick ?: "사용자",
+            totalExpense = totalExpense
+        )
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        // 2. 월 선택기
-        MonthSelector()
+        MonthSelector(
+            year = currentYear,
+            month = currentMonth,
+            onPrevClick = {
+                if (currentMonth == 1) { currentYear--; currentMonth = 12 } else { currentMonth-- }
+            },
+            onNextClick = {
+                if (currentMonth == 12) { currentYear++; currentMonth = 1 } else { currentMonth++ }
+            }
+        )
 
         Spacer(modifier = Modifier.height(20.dp))
 
-        // 3. 캘린더 영역
-        CalendarSection(year = 2025, month = 9, data = calendarData)
+        CalendarSection(
+            year = currentYear,
+            month = currentMonth,
+            dailyData = dailyMap
+        )
 
         Spacer(modifier = Modifier.height(30.dp))
 
-        // 4. 접이식 카테고리 리스트
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 24.dp)
-                .animateContentSize(
-                    animationSpec = spring(
-                        dampingRatio = Spring.DampingRatioLowBouncy,
-                        stiffness = Spring.StiffnessLow
-                    )
-                )
+                .animateContentSize(animationSpec = spring(dampingRatio = Spring.DampingRatioLowBouncy, stiffness = Spring.StiffnessLow))
         ) {
             Row(
                 modifier = Modifier
@@ -152,12 +185,7 @@ fun MainScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = "카테고리별 소비 보기",
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.Black
-                )
+                Text("카테고리별 소비 보기", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.Black)
                 Icon(
                     imageVector = if (isExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
                     contentDescription = "toggle",
@@ -167,9 +195,13 @@ fun MainScreen(
 
             if (isExpanded) {
                 Spacer(modifier = Modifier.height(10.dp))
-                categoryList.forEach { item ->
-                    CategoryRowItem(item = item, totalAmount = totalExpense)
-                    Spacer(modifier = Modifier.height(16.dp))
+                if (categoryStats.isEmpty()) {
+                    Text("소비 내역이 없습니다.", modifier = Modifier.padding(16.dp), color = Color.Gray)
+                } else {
+                    categoryStats.forEach { item ->
+                        CategoryRowItem(item = item, totalAmount = totalExpense)
+                        Spacer(modifier = Modifier.height(16.dp))
+                    }
                 }
                 Spacer(modifier = Modifier.height(50.dp))
             }
@@ -177,17 +209,24 @@ fun MainScreen(
     }
 }
 
+// --- 컴포넌트 구현 ---
+
 @Composable
-fun CalendarSection(year: Int, month: Int, data: Map<Int, DailyTransaction>) {
+fun CalendarSection(year: Int, month: Int, dailyData: Map<Int, DailySummary>) {
+    val calendar = Calendar.getInstance().apply {
+        set(year, month - 1, 1)
+    }
+    val daysInMonth = calendar.getActualMaximum(Calendar.DAY_OF_MONTH)
+    val firstDayOfWeek = calendar.get(Calendar.DAY_OF_WEEK)
+
+    val blankDays = firstDayOfWeek - 1
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp)
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceAround
-        ) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
             listOf("일", "월", "화", "수", "목", "금", "토").forEachIndexed { index, day ->
                 Text(
                     text = day,
@@ -202,27 +241,24 @@ fun CalendarSection(year: Int, month: Int, data: Map<Int, DailyTransaction>) {
 
         Spacer(modifier = Modifier.height(10.dp))
 
-        val startDayOffset = 1
-        val lastDay = 30
-        val totalCells = startDayOffset + lastDay
-        val rows = (totalCells / 7) + 1
+        val totalCells = blankDays + daysInMonth
+        val rows = (totalCells / 7) + if (totalCells % 7 == 0) 0 else 1
 
         for (row in 0 until rows) {
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 8.dp),
+                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
                 horizontalArrangement = Arrangement.SpaceAround
             ) {
                 for (col in 0 until 7) {
-                    val dayCounter = (row * 7) + col - startDayOffset + 1
+                    val cellIndex = (row * 7) + col
+                    val dayNumber = cellIndex - blankDays + 1
 
-                    if (dayCounter in 1..lastDay) {
-                        val dayData = data[dayCounter]
+                    if (dayNumber in 1..daysInMonth) {
+                        val summary = dailyData[dayNumber]
                         DayCell(
-                            day = dayCounter,
-                            income = dayData?.income ?: 0,
-                            expense = dayData?.expense ?: 0,
+                            day = dayNumber,
+                            income = summary?.income ?: 0,
+                            expense = summary?.expense ?: 0,
                             modifier = Modifier.weight(1f)
                         )
                     } else {
@@ -237,9 +273,7 @@ fun CalendarSection(year: Int, month: Int, data: Map<Int, DailyTransaction>) {
 @Composable
 fun DayCell(day: Int, income: Int, expense: Int, modifier: Modifier = Modifier) {
     Column(
-        modifier = modifier
-            .heightIn(min = 60.dp)
-            .clickable { },
+        modifier = modifier.heightIn(min = 60.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(text = "$day", fontSize = 16.sp, color = Color.Black, fontWeight = FontWeight.Medium)
@@ -252,13 +286,47 @@ fun DayCell(day: Int, income: Int, expense: Int, modifier: Modifier = Modifier) 
     }
 }
 
-fun formatMoney(amount: Int): String {
-    return NumberFormat.getNumberInstance(Locale.KOREA).format(amount)
+@Composable
+fun MonthSelector(year: Int, month: Int, onPrevClick: () -> Unit, onNextClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 24.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color(0xFFFFFFFF))
+            .padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        IconButton(onClick = onPrevClick) {
+            Text("◀", fontSize = 18.sp, color = Color.Gray)
+        }
+        Text(text = "$year. $month", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+        IconButton(onClick = onNextClick) {
+            Text("▶", fontSize = 18.sp, color = Color.Gray)
+        }
+    }
+}
+
+@Composable
+fun TopSection(userName: String, totalExpense: Int) {
+    val formattedTotal = NumberFormat.getNumberInstance(Locale.KOREA).format(totalExpense)
+    Column(modifier = Modifier.padding(top = 10.dp, start = 24.dp, end = 24.dp)) {
+        Row(verticalAlignment = Alignment.Bottom) {
+            Text(text = userName, fontSize = 28.sp, fontWeight = FontWeight.Bold)
+            Text(text = "님", fontSize = 24.sp, modifier = Modifier.padding(bottom = 2.dp))
+        }
+        Text(text = "이번 달 소비 금액", fontSize = 18.sp, color = Color.Gray, modifier = Modifier.padding(top = 8.dp))
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 10.dp)) {
+            Text(text = formattedTotal, fontSize = 32.sp, fontWeight = FontWeight.ExtraBold)
+            Text(text = "원", fontSize = 32.sp, fontWeight = FontWeight.Light, modifier = Modifier.padding(start = 4.dp))
+        }
+    }
 }
 
 @Composable
 fun CategoryRowItem(item: CategoryExpense, totalAmount: Int) {
-    val percent = (item.amount.toDouble() / totalAmount * 100).toInt()
+    val percent = if (totalAmount > 0) (item.amount.toDouble() / totalAmount * 100).toInt() else 0
     val formattedAmount = NumberFormat.getNumberInstance(Locale.KOREA).format(item.amount)
 
     Row(
@@ -283,43 +351,53 @@ fun CategoryRowItem(item: CategoryExpense, totalAmount: Int) {
     }
 }
 
-@Composable
-fun TopSection(totalExpense: Int) {
-    val formattedTotal = NumberFormat.getNumberInstance(Locale.KOREA).format(totalExpense)
-    // ★ 수정: 상단 여백을 60dp -> 10dp로 축소 (위에 로고가 생겼으므로)
-    Column(modifier = Modifier.padding(top = 10.dp, start = 24.dp, end = 24.dp)) {
-        Row(verticalAlignment = Alignment.Bottom) {
-            Text(text = "김사용자", fontSize = 28.sp, fontWeight = FontWeight.Bold)
-            Text(text = "님", fontSize = 24.sp, modifier = Modifier.padding(bottom = 2.dp))
-        }
-        Text(text = "이번 달 소비 금액", fontSize = 18.sp, color = Color.Gray, modifier = Modifier.padding(top = 8.dp))
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 10.dp)) {
-            Text(text = formattedTotal, fontSize = 32.sp, fontWeight = FontWeight.ExtraBold)
-            Text(text = "원", fontSize = 32.sp, fontWeight = FontWeight.Light, modifier = Modifier.padding(start = 4.dp))
-        }
+// ★ [신규] 영문 카테고리 -> 한글 이름 변환 함수
+fun getCategoryDisplayName(category: String): String {
+    return when (category.uppercase()) {
+        "FOOD" -> "식비"
+        "TRANSPORT", "TRAFFIC" -> "교통"
+        "SHOPPING" -> "쇼핑"
+        "HEALTH", "MEDICAL" -> "의료/건강"
+        "CULTURE" -> "문화/여가"
+        "FIXED", "UTILITY" -> "공과금/고정비"
+        "TRANSFER" -> "이체"
+        "MART", "CONVENIENCE", "STORE" -> "편의점/마트"
+        "ETC", "OTHERS" -> "기타"
+        else -> category // 매핑 안 되면 원래 값 사용
     }
 }
 
-@Composable
-fun MonthSelector() {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 24.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .background(Color(0xFFFFFFFF))
-            .padding(16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.Center
-    ) {
-        Text("◀", fontSize = 18.sp, color = Color.Gray)
-        Text(text = " 9월 ", fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(horizontal = 20.dp))
-        Text("▶", fontSize = 18.sp, color = Color.Gray)
+// ★ 카테고리 매핑 헬퍼 함수 (한글 기준)
+fun getCategoryIcon(category: String): ImageVector {
+    return when (category) {
+        "식비" -> Icons.Default.Restaurant
+        "교통" -> Icons.Default.DirectionsCar
+        "쇼핑" -> Icons.Default.ShoppingCart
+        "의료/건강" -> Icons.Default.LocalHospital
+        "문화/여가" -> Icons.Default.Movie
+        "공과금/고정비" -> Icons.Default.DateRange
+        "이체" -> Icons.Default.Send
+        "편의점/마트" -> Icons.Default.Store
+        "기타" -> Icons.Default.MoreHoriz
+        else -> Icons.Default.List
     }
 }
 
-@Preview(showBackground = true)
-@Composable
-fun MainScreenPreview() {
-    MainScreen()
+fun getCategoryColor(category: String): Color {
+    return when (category) {
+        "식비" -> Color(0xFFFF8A80)
+        "교통" -> Color(0xFF80D8FF)
+        "쇼핑" -> Color(0xFFA5D6A7)
+        "의료/건강" -> Color(0xFFF48FB1)
+        "문화/여가" -> Color(0xFFCE93D8)
+        "공과금/고정비" -> Color(0xFFBCAAA4)
+        "이체" -> Color(0xFF90CAF9)
+        "편의점/마트" -> Color(0xFFFFCC80)
+        "기타" -> Color(0xFFEEEEEE)
+        else -> Color.Gray
+    }
+}
+
+fun formatMoney(amount: Int): String {
+    return NumberFormat.getNumberInstance(Locale.KOREA).format(amount)
 }
