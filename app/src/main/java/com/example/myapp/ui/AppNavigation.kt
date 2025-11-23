@@ -40,7 +40,7 @@ import com.example.myapp.ui.screens.mypage.FollowListScreen
 
 sealed class Screen(val route: String, val title: String, val icon: ImageVector) {
     object Home : Screen("home", "홈", Icons.Default.Home)
-    object Group : Screen("group", "핀 메이트", Icons.Default.Group)
+    object Group : Screen("group", "핀메이트", Icons.Default.Group)
     object Community : Screen("community", "커뮤니티", Icons.Default.Forum)
     object AI : Screen("ai", "AI 메이트", Icons.Default.Chat)
     object MyPage : Screen("mypage", "마이", Icons.Default.AccountCircle)

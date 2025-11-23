@@ -24,10 +24,8 @@ import java.text.NumberFormat
 import java.util.Locale
 import com.example.myapp.ui.components.CommonTopBar
 import com.example.myapp.R
-import com.example.myapp.ui.data.api.RetrofitClient // API 클라이언트
-import kotlinx.coroutines.launch
 
-// UI용 데이터 모델 (API 응답을 이 형태로 변환해서 사용)
+// UI용 데이터 모델
 data class MateUser(
     val id: Int,
     val name: String,
@@ -41,70 +39,48 @@ fun GroupScreen() {
     var selectedTab by remember { mutableStateOf(0) } // 0: 그룹, 1: 팔로잉
     var selectedUser by remember { mutableStateOf<MateUser?>(null) }
 
-    // ★ 서버 데이터 상태 관리
-    var groupList by remember { mutableStateOf<List<MateUser>>(emptyList()) }
-    var followingList by remember { mutableStateOf<List<MateUser>>(emptyList()) }
-    var isLoading by remember { mutableStateOf(true) }
+    // ★ 하드코딩 데이터 (서버 연결 없이 바로 보여줌)
+    val groupList = remember { mutableStateListOf(
+        MateUser(1, "김철수", 100000, 26, false),
+        MateUser(2, "이영희", 154000, 12, true),
+        MateUser(3, "박민수", 89000, -5, false),
+        MateUser(4, "최수진", 210000, 30, false),
+        MateUser(5, "정재훈", 45000, 0, true)
+    )}
 
-    val coroutineScope = rememberCoroutineScope()
+    val followingList = remember { mutableStateListOf(
+        MateUser(2, "이영희", 154000, 12, true),
+        MateUser(5, "정재훈", 45000, 0, true),
+        MateUser(14, "아이유", 550000, 5, true) // 그룹 외 팔로잉 예시
+    )}
 
-    // ★ 화면 진입 시 API 데이터 로딩
-    LaunchedEffect(Unit) {
-        try {
-            // 그룹 멤버 조회 API 호출
-            val response = RetrofitClient.api.getGroupMembers()
-            if (response.isSuccessful && response.body() != null) {
-                val apiMembers = response.body()!!
-
-                // API 모델 -> UI 모델 변환
-                val mappedUsers = apiMembers.map { member ->
-                    MateUser(
-                        id = member.userId,
-                        name = member.nick,
-                        spentAmount = member.spendAmount,
-                        momPercent = member.growthRate.toInt(),
-                        isFollowing = member.isFollowing
-                    )
-                }
-
-                groupList = mappedUsers
-                // 팔로잉 목록은 그룹 목록 중 팔로우한 사람만 필터링 (임시 로직)
-                // 실제로는 팔로잉 목록 API (/social/following)를 따로 호출하는 것이 정확함
-                followingList = mappedUsers.filter { it.isFollowing }
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-        } finally {
-            isLoading = false
-        }
-    }
-
-    // 팔로우 토글 함수 (서버 통신)
+    // 로컬 팔로우 토글 함수 (서버 통신 X)
     fun toggleFollow(user: MateUser) {
-        coroutineScope.launch {
-            try {
-                // 1. UI 선반영 (Optimistic Update) - 반응 속도를 위해
-                val updatedFollowingState = !user.isFollowing
+        val isNowFollowing = !user.isFollowing
 
-                // 리스트 업데이트 (불변성 유지하며 교체)
-                groupList = groupList.map {
-                    if (it.id == user.id) it.copy(isFollowing = updatedFollowingState) else it
-                }
-                followingList = groupList.filter { it.isFollowing }
+        // 1. 그룹 리스트 업데이트
+        val groupIndex = groupList.indexOfFirst { it.id == user.id }
+        if (groupIndex != -1) {
+            groupList[groupIndex] = groupList[groupIndex].copy(isFollowing = isNowFollowing)
+        }
 
-                // 팝업 유저 상태도 업데이트
-                if (selectedUser?.id == user.id) {
-                    selectedUser = selectedUser!!.copy(isFollowing = updatedFollowingState)
-                }
-
-                // 2. 서버 요청 (비동기)
-                // API 문서: POST /social/follow { "targetId": 55 }
-                RetrofitClient.api.followUser(mapOf("targetId" to user.id))
-
-            } catch (e: Exception) {
-                e.printStackTrace()
-                // 실패 시 롤백 로직이 필요할 수 있음
+        // 2. 팔로잉 리스트 업데이트
+        if (isNowFollowing) {
+            // 팔로우: 리스트에 없다면 추가
+            if (followingList.none { it.id == user.id }) {
+                followingList.add(user.copy(isFollowing = true))
             }
+        } else {
+            // 언팔로우: 리스트에서 제거
+            val followIndex = followingList.indexOfFirst { it.id == user.id }
+            if (followIndex != -1) {
+                followingList.removeAt(followIndex)
+            }
+        }
+
+        // 3. 팝업 상태 업데이트
+        if (selectedUser?.id == user.id) {
+            selectedUser = selectedUser!!.copy(isFollowing = isNowFollowing)
         }
     }
 
@@ -135,23 +111,18 @@ fun GroupScreen() {
             GroupTabButton("팔로잉", selectedTab == 1) { selectedTab = 1 }
         }
 
-        if (isLoading) {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = Color(0xFF002CCE))
-            }
-        } else {
-            LazyColumn(
-                modifier = Modifier.weight(1f),
-                contentPadding = PaddingValues(horizontal = 24.dp, vertical = 10.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                items(displayList) { user ->
-                    MateItemCard(
-                        user = user,
-                        onItemClick = { selectedUser = user },
-                        onFollowClick = { toggleFollow(user) }
-                    )
-                }
+        // 로딩 없이 바로 리스트 표시
+        LazyColumn(
+            modifier = Modifier.weight(1f),
+            contentPadding = PaddingValues(horizontal = 24.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            items(displayList) { user ->
+                MateItemCard(
+                    user = user,
+                    onItemClick = { selectedUser = user },
+                    onFollowClick = { toggleFollow(user) }
+                )
             }
         }
     }
@@ -193,7 +164,6 @@ fun MateItemCard(
             .padding(16.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // 프로필 아이콘
         Box(
             modifier = Modifier.size(60.dp).clip(CircleShape).background(Color(0xFFF0F0F0)),
             contentAlignment = Alignment.Center
