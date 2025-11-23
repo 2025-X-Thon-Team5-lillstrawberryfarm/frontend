@@ -36,34 +36,29 @@ fun FollowListScreen(
     var selectedUser by remember { mutableStateOf<MateUser?>(null) }
     var searchText by remember { mutableStateOf("") }
 
-    // ★ 서버 데이터 상태
     var followList by remember { mutableStateOf<List<MateUser>>(emptyList()) }
     var isLoading by remember { mutableStateOf(false) }
     val coroutineScope = rememberCoroutineScope()
 
-    // 데이터 로딩 함수
     fun loadData() {
         coroutineScope.launch {
             isLoading = true
             try {
                 val response = if (selectedTab == 0) {
-                    // 0: 팔로워 목록 조회 (가정된 엔드포인트)
                     RetrofitClient.api.getFollowers()
                 } else {
-                    // 1: 팔로잉 목록 조회
                     RetrofitClient.api.getFollowings()
                 }
 
                 if (response.isSuccessful && response.body() != null) {
-                    // API 응답(SocialUserResponse) -> UI 모델(MateUser) 변환
-                    // 목록 API에는 소비 금액 정보가 없으므로 0으로 설정
                     followList = response.body()!!.map { socialUser ->
                         MateUser(
                             id = socialUser.userId,
-                            name = socialUser.nick,
-                            spentAmount = 0, // 정보 없음
-                            momPercent = 0,  // 정보 없음
-                            isFollowing = (selectedTab == 1) // 팔로잉 탭이면 true, 팔로워면 false(맞팔 여부 알 수 없음)
+                            // ★ 수정: 닉네임이 null이면 "알 수 없음"으로 대체
+                            name = socialUser.nick ?: "알 수 없음",
+                            spentAmount = 0,
+                            momPercent = 0,
+                            isFollowing = (selectedTab == 1)
                         )
                     }
                 } else {
@@ -77,23 +72,20 @@ fun FollowListScreen(
         }
     }
 
-    // 탭 변경 시 데이터 리로드
     LaunchedEffect(selectedTab) {
         loadData()
     }
 
-    // 팝업
     if (selectedUser != null) {
         UserDetailPopup(
             user = selectedUser!!,
             onDismiss = { selectedUser = null },
             onFollowToggle = {
-                // 팝업에서 팔로우 토글 시 서버 요청
                 coroutineScope.launch {
                     try {
                         RetrofitClient.api.followUser(mapOf("targetId" to selectedUser!!.id))
                         selectedUser = selectedUser!!.copy(isFollowing = !selectedUser!!.isFollowing)
-                        loadData() // 목록 갱신
+                        loadData()
                     } catch (e: Exception) {
                         e.printStackTrace()
                     }
@@ -107,7 +99,6 @@ fun FollowListScreen(
             .fillMaxSize()
             .background(Color.White)
     ) {
-        // 상단 바
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -119,32 +110,30 @@ fun FollowListScreen(
             ) {
                 Icon(Icons.Default.ArrowBack, contentDescription = "뒤로가기")
             }
-            // 사용자 이름은 프로필 API에서 받아오거나, 일단 "마이페이지"로 표시
+            // ★ 타이틀 수정: 탭에 따라 다르게 표시
             Text(
-                text = "친구 목록",
+                text = if (selectedTab == 0) "팔로워" else "팔로잉",
                 fontSize = 18.sp,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.align(Alignment.Center)
             )
         }
 
-        // 탭 버튼
         Row(modifier = Modifier.fillMaxWidth()) {
             TabItem(
-                text = if (selectedTab == 0) "팔로워" else "팔로워", // 로딩 전이라 숫자 표시 어려움, 텍스트 간소화
+                text = "팔로워",
                 isSelected = selectedTab == 0,
                 onClick = { selectedTab = 0 },
                 modifier = Modifier.weight(1f)
             )
             TabItem(
-                text = if (selectedTab == 1) "팔로잉" else "팔로잉",
+                text = "팔로잉",
                 isSelected = selectedTab == 1,
                 onClick = { selectedTab = 1 },
                 modifier = Modifier.weight(1f)
             )
         }
 
-        // 검색창
         Box(modifier = Modifier.padding(16.dp)) {
             Row(
                 modifier = Modifier
@@ -171,7 +160,6 @@ fun FollowListScreen(
             }
         }
 
-        // 리스트
         if (isLoading) {
             Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(color = Color(0xFF002CCE))
@@ -181,7 +169,6 @@ fun FollowListScreen(
                 modifier = Modifier.weight(1f),
                 contentPadding = PaddingValues(horizontal = 16.dp)
             ) {
-                // 검색어 필터링
                 val filteredList = if (searchText.isBlank()) followList else followList.filter { it.name.contains(searchText) }
 
                 items(filteredList) { user ->
@@ -192,9 +179,8 @@ fun FollowListScreen(
                         onButtonClick = {
                             coroutineScope.launch {
                                 try {
-                                    // 팔로우/언팔로우 요청
                                     RetrofitClient.api.followUser(mapOf("targetId" to user.id))
-                                    loadData() // 성공 시 목록 새로고침
+                                    loadData()
                                 } catch (e: Exception) {
                                     e.printStackTrace()
                                 }

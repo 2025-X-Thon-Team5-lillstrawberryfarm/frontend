@@ -1,12 +1,12 @@
 package com.example.myapp.ui.screens.community
 
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
@@ -18,19 +18,17 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.myapp.ui.data.api.CommentRequest
 import com.example.myapp.ui.data.api.RetrofitClient
 import kotlinx.coroutines.launch
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
-// --- 댓글 데이터 모델 (UI용) ---
+// 댓글 데이터 모델 (UI용)
 data class Comment(
     val id: Int,
     val author: String,
@@ -50,36 +48,45 @@ fun PostDetailScreen(
     var postDate by remember { mutableStateOf("") }
 
     var isLiked by remember { mutableStateOf(false) }
-    var likeCount by remember { mutableStateOf(0) }
+    var likeCount by remember { mutableIntStateOf(0) }
 
-    // 댓글 리스트
     var comments = remember { mutableStateListOf<Comment>() }
 
     var commentInput by remember { mutableStateOf("") }
     val mainBlue = Color(0xFF002CCE)
     val coroutineScope = rememberCoroutineScope()
+    val context = LocalContext.current
 
-    // ★ 서버에서 상세 정보 로딩
-    LaunchedEffect(postId) {
-        try {
-            val response = RetrofitClient.api.getPostDetail(postId)
-            if (response.isSuccessful && response.body() != null) {
-                val data = response.body()!!
-                postTitle = data.title
-                postContent = data.content ?: ""
-                postAuthor = data.writer
-                postDate = data.createdAt.take(10)
-                likeCount = data.like
-                // 댓글 매핑 (API 응답에는 날짜/ID가 없으므로 임시값 처리)
-                if (data.comments != null) {
-                    data.comments.forEachIndexed { index, commentRes ->
-                        comments.add(Comment(index, commentRes.user, commentRes.text, "최근"))
+    // 글 상세 정보 로딩 함수
+    fun loadPostDetail() {
+        coroutineScope.launch {
+            try {
+                val response = RetrofitClient.api.getPostDetail(postId)
+                if (response.isSuccessful && response.body() != null) {
+                    val data = response.body()!!
+                    postTitle = data.title
+                    postContent = data.content ?: ""
+                    postAuthor = data.writer
+                    postDate = data.createdAt.take(10)
+                    likeCount = data.like
+
+                    // 댓글 갱신
+                    comments.clear()
+                    if (data.comments != null) {
+                        data.comments.forEachIndexed { index, commentRes ->
+                            comments.add(Comment(index, commentRes.user, commentRes.text, ""))
+                        }
                     }
                 }
+            } catch (e: Exception) {
+                postTitle = "글을 불러오지 못했습니다."
             }
-        } catch (e: Exception) {
-            postTitle = "글을 불러오지 못했습니다."
         }
+    }
+
+    // 초기 로딩
+    LaunchedEffect(postId) {
+        loadPostDetail()
     }
 
     Column(
@@ -138,13 +145,26 @@ fun PostDetailScreen(
                     )
                     Spacer(modifier = Modifier.height(32.dp))
 
-                    // 좋아요 버튼 (기능은 UI 상에서만 동작하도록 둠)
+                    // ★ 좋아요 버튼 (API 연동)
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable {
-                                isLiked = !isLiked
-                                if (isLiked) likeCount++ else likeCount--
+                                // 좋아요 API 호출
+                                coroutineScope.launch {
+                                    try {
+                                        val response = RetrofitClient.api.likePost(postId)
+                                        if (response.isSuccessful) {
+                                            isLiked = !isLiked
+                                            if (isLiked) likeCount++ else likeCount--
+                                        } else {
+                                            // 실패 시 처리 (예: 이미 좋아요 누름 등)
+                                            Toast.makeText(context, "좋아요 처리에 실패했습니다.", Toast.LENGTH_SHORT).show()
+                                        }
+                                    } catch (e: Exception) {
+                                        e.printStackTrace()
+                                    }
+                                }
                             }
                             .border(1.dp, Color.LightGray, RoundedCornerShape(8.dp))
                             .padding(12.dp),
@@ -199,17 +219,22 @@ fun PostDetailScreen(
             IconButton(
                 onClick = {
                     if (commentInput.isNotBlank()) {
-                        // 댓글 작성 API가 있다면 여기서 호출
-                        // 현재는 로컬 리스트에만 추가
-                        comments.add(
-                            Comment(
-                                id = comments.size + 1,
-                                author = "나",
-                                content = commentInput,
-                                date = SimpleDateFormat("MM.dd HH:mm", Locale.US).format(Date())
-                            )
-                        )
-                        commentInput = ""
+                        // ★ 댓글 작성 API 호출
+                        coroutineScope.launch {
+                            try {
+                                val response = RetrofitClient.api.addComment(postId, CommentRequest(commentInput))
+                                if (response.isSuccessful) {
+                                    Toast.makeText(context, "댓글이 등록되었습니다.", Toast.LENGTH_SHORT).show()
+                                    commentInput = "" // 입력창 비우기
+                                    loadPostDetail() // 댓글 목록 갱신을 위해 상세 정보 다시 로딩
+                                } else {
+                                    Toast.makeText(context, "댓글 등록 실패", Toast.LENGTH_SHORT).show()
+                                }
+                            } catch (e: Exception) {
+                                e.printStackTrace()
+                                Toast.makeText(context, "네트워크 오류", Toast.LENGTH_SHORT).show()
+                            }
+                        }
                     }
                 }
             ) {
@@ -233,7 +258,9 @@ fun CommentItem(comment: Comment) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(text = comment.author, fontWeight = FontWeight.Bold, fontSize = 14.sp)
             Spacer(modifier = Modifier.width(8.dp))
-            Text(text = comment.date, color = Color.Gray, fontSize = 12.sp)
+            if (comment.date.isNotEmpty()) {
+                Text(text = comment.date, color = Color.Gray, fontSize = 12.sp)
+            }
         }
         Spacer(modifier = Modifier.height(4.dp))
         Text(text = comment.content, fontSize = 15.sp)

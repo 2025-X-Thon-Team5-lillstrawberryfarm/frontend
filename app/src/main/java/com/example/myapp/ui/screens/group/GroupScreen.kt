@@ -17,6 +17,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -24,10 +25,11 @@ import java.text.NumberFormat
 import java.util.Locale
 import com.example.myapp.ui.components.CommonTopBar
 import com.example.myapp.R
-import com.example.myapp.ui.data.api.RetrofitClient // API 클라이언트
+import com.example.myapp.ui.data.api.RetrofitClient
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.async
 
-// UI용 데이터 모델 (API 응답을 이 형태로 변환해서 사용)
+// 데이터 모델 (안전한 초기화)
 data class MateUser(
     val id: Int,
     val name: String,
@@ -38,79 +40,107 @@ data class MateUser(
 
 @Composable
 fun GroupScreen() {
-    var selectedTab by remember { mutableStateOf(0) } // 0: 그룹, 1: 팔로잉
+    var selectedTab by remember { mutableStateOf(0) }
     var selectedUser by remember { mutableStateOf<MateUser?>(null) }
 
-    // ★ 서버 데이터 상태 관리
     var groupList by remember { mutableStateOf<List<MateUser>>(emptyList()) }
     var followingList by remember { mutableStateOf<List<MateUser>>(emptyList()) }
+
     var isLoading by remember { mutableStateOf(true) }
+    var errorMessage by remember { mutableStateOf<String?>(null) } // ★ 에러 메시지 상태 추가
 
     val coroutineScope = rememberCoroutineScope()
+    val context = LocalContext.current
 
-    // ★ 화면 진입 시 API 데이터 로딩
-    LaunchedEffect(Unit) {
-        try {
-            // 그룹 멤버 조회 API 호출
-            val response = RetrofitClient.api.getGroupMembers()
-            if (response.isSuccessful && response.body() != null) {
-                val apiMembers = response.body()!!
-
-                // API 모델 -> UI 모델 변환
-                val mappedUsers = apiMembers.map { member ->
-                    MateUser(
-                        id = member.userId,
-                        name = member.nick,
-                        spentAmount = member.spendAmount,
-                        momPercent = member.growthRate.toInt(),
-                        isFollowing = member.isFollowing
-                    )
-                }
-
-                groupList = mappedUsers
-                // 팔로잉 목록은 그룹 목록 중 팔로우한 사람만 필터링 (임시 로직)
-                // 실제로는 팔로잉 목록 API (/social/following)를 따로 호출하는 것이 정확함
-                followingList = mappedUsers.filter { it.isFollowing }
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-        } finally {
-            isLoading = false
-        }
-    }
-
-    // 팔로우 토글 함수 (서버 통신)
-    fun toggleFollow(user: MateUser) {
+    fun loadData() {
         coroutineScope.launch {
+            isLoading = true
+            errorMessage = null // 에러 초기화
             try {
-                // 1. UI 선반영 (Optimistic Update) - 반응 속도를 위해
-                val updatedFollowingState = !user.isFollowing
+                RetrofitClient.initToken(context)
 
-                // 리스트 업데이트 (불변성 유지하며 교체)
-                groupList = groupList.map {
-                    if (it.id == user.id) it.copy(isFollowing = updatedFollowingState) else it
+                // 병렬 호출
+                val groupDeferred = async { RetrofitClient.api.getGroupMembers() }
+                val followingDeferred = async { RetrofitClient.api.getFollowings() }
+
+                val groupRes = groupDeferred.await()
+                val followingRes = followingDeferred.await()
+
+                // 1. 내 팔로잉 ID 목록 추출 (안전 처리)
+                val myFollowingIds = if (followingRes.isSuccessful && followingRes.body() != null) {
+                    followingRes.body()!!.mapNotNull { it.userId }.toSet() // mapNotNull 사용
+                } else {
+                    emptySet()
                 }
-                followingList = groupList.filter { it.isFollowing }
 
-                // 팝업 유저 상태도 업데이트
-                if (selectedUser?.id == user.id) {
-                    selectedUser = selectedUser!!.copy(isFollowing = updatedFollowingState)
+                // 2. 그룹 멤버 리스트 구성 (초강력 안전 처리)
+                val mappedGroupUsers = if (groupRes.isSuccessful && groupRes.body() != null) {
+                    groupRes.body()!!.mapNotNull { member ->
+                        // 필수 데이터가 없으면 해당 유저는 목록에서 제외 (앱 종료 방지)
+                        if (member.nick == null) return@mapNotNull null
+
+                        MateUser(
+                            id = member.userId,
+                            name = member.nick,
+                            spentAmount = member.spendAmount ?: 0,
+                            momPercent = member.growthRate?.toInt() ?: 0,
+                            isFollowing = member.userId in myFollowingIds
+                        )
+                    }
+                } else {
+                    emptyList()
                 }
 
-                // 2. 서버 요청 (비동기)
-                // API 문서: POST /social/follow { "targetId": 55 }
-                RetrofitClient.api.followUser(mapOf("targetId" to user.id))
+                groupList = mappedGroupUsers
+
+                // 3. 팔로잉 리스트 구성
+                val followingInGroup = mappedGroupUsers.filter { it.isFollowing }
+
+                val otherFollowings = if (followingRes.isSuccessful && followingRes.body() != null) {
+                    followingRes.body()!!
+                        .filter { it.userId !in mappedGroupUsers.map { u -> u.id } }
+                        .mapNotNull { socialUser ->
+                            if (socialUser.nick == null) return@mapNotNull null
+                            MateUser(
+                                id = socialUser.userId,
+                                name = socialUser.nick,
+                                spentAmount = 0,
+                                momPercent = 0,
+                                isFollowing = true
+                            )
+                        }
+                } else {
+                    emptyList()
+                }
+
+                followingList = (followingInGroup + otherFollowings).sortedBy { it.name }
 
             } catch (e: Exception) {
                 e.printStackTrace()
-                // 실패 시 롤백 로직이 필요할 수 있음
+                errorMessage = "데이터를 불러오는 중 오류가 발생했습니다.\n(${e.message})" // 화면에 에러 표시
+            } finally {
+                isLoading = false
+            }
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        loadData()
+    }
+
+    fun toggleFollow(user: MateUser) {
+        coroutineScope.launch {
+            try {
+                RetrofitClient.api.followUser(mapOf("targetId" to user.id))
+                loadData()
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
         }
     }
 
     val displayList = if (selectedTab == 0) groupList else followingList
 
-    // 팝업
     if (selectedUser != null) {
         UserDetailPopup(
             user = selectedUser!!,
@@ -124,6 +154,8 @@ fun GroupScreen() {
             .fillMaxSize()
             .background(Color(0xFFF9F9F9))
     ) {
+        // ★ 상단바 (이미지가 없어도 앱이 죽지 않도록 예외처리 내장된 CommonTopBar 사용 권장)
+        // 만약 여기서 또 죽으면 R.drawable.fin_text를 확인하거나 CommonTopBar 내부를 텍스트로 바꿔야 함
         CommonTopBar(titleImageId = R.drawable.fin_text)
 
         Row(
@@ -139,18 +171,37 @@ fun GroupScreen() {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(color = Color(0xFF002CCE))
             }
+        } else if (errorMessage != null) {
+            // ★ 에러 발생 시 앱 종료 대신 에러 메시지 표시
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text(
+                    text = errorMessage!!,
+                    color = Color.Red,
+                    fontSize = 14.sp,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
+            }
         } else {
-            LazyColumn(
-                modifier = Modifier.weight(1f),
-                contentPadding = PaddingValues(horizontal = 24.dp, vertical = 10.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                items(displayList) { user ->
-                    MateItemCard(
-                        user = user,
-                        onItemClick = { selectedUser = user },
-                        onFollowClick = { toggleFollow(user) }
+            if (displayList.isEmpty()) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text(
+                        text = if (selectedTab == 0) "그룹 멤버가 없습니다." else "팔로잉 중인 멤버가 없습니다.",
+                        color = Color.Gray
                     )
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier.weight(1f),
+                    contentPadding = PaddingValues(horizontal = 24.dp, vertical = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    items(displayList) { user ->
+                        MateItemCard(
+                            user = user,
+                            onItemClick = { selectedUser = user },
+                            onFollowClick = { toggleFollow(user) }
+                        )
+                    }
                 }
             }
         }
@@ -193,7 +244,6 @@ fun MateItemCard(
             .padding(16.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // 프로필 아이콘
         Box(
             modifier = Modifier.size(60.dp).clip(CircleShape).background(Color(0xFFF0F0F0)),
             contentAlignment = Alignment.Center

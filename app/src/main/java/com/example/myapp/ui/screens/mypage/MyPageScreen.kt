@@ -1,6 +1,7 @@
 package com.example.myapp.ui.screens.mypage
 
 import android.content.Context
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -40,7 +41,6 @@ fun MyPageScreen(
     onFollowerClick: () -> Unit,
     onFollowingClick: () -> Unit
 ) {
-    // 상태 변수
     var userName by remember { mutableStateOf("로딩중...") }
     var followerCount by remember { mutableIntStateOf(0) }
     var followingCount by remember { mutableIntStateOf(0) }
@@ -50,11 +50,10 @@ fun MyPageScreen(
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
 
-    // ★ API 데이터 로딩
     LaunchedEffect(Unit) {
-        RetrofitClient.initToken(context) // 토큰 초기화 확인
+        RetrofitClient.initToken(context)
         try {
-            // 1. 프로필 정보 가져오기
+            // 프로필 정보
             val profileRes = RetrofitClient.api.getProfile()
             if (profileRes.isSuccessful && profileRes.body() != null) {
                 val profile = profileRes.body()!!
@@ -63,11 +62,10 @@ fun MyPageScreen(
                 followingCount = profile.counts.following
             }
 
-            // 2. 내 글 목록 가져오기 (전체 글 조회 후 내 닉네임으로 필터링)
+            // 내 글 목록
             val postsRes = RetrofitClient.api.getPosts()
             if (postsRes.isSuccessful && postsRes.body() != null) {
                 val allPosts = postsRes.body()!!
-                // 내 닉네임과 작성자가 같은 글만 필터링
                 myPosts = allPosts.filter { it.writer == userName }.map { apiPost ->
                     MyPost(
                         id = apiPost.id,
@@ -126,8 +124,22 @@ fun MyPageScreen(
                             post = post,
                             onClick = { onPostClick(post.id) },
                             onDeleteClick = {
-                                // 실제 삭제 API가 있다면 여기서 호출
-                                // myPosts = myPosts.filter { it.id != post.id }
+                                // ★ 글 삭제 API 호출
+                                coroutineScope.launch {
+                                    try {
+                                        val response = RetrofitClient.api.deletePost(post.id)
+                                        if (response.isSuccessful) {
+                                            Toast.makeText(context, "삭제되었습니다.", Toast.LENGTH_SHORT).show()
+                                            // 로컬 리스트에서 제거하여 UI 즉시 반영
+                                            myPosts = myPosts.filter { it.id != post.id }
+                                        } else {
+                                            Toast.makeText(context, "삭제 실패", Toast.LENGTH_SHORT).show()
+                                        }
+                                    } catch (e: Exception) {
+                                        e.printStackTrace()
+                                        Toast.makeText(context, "네트워크 오류", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
                             }
                         )
                         Spacer(modifier = Modifier.height(16.dp))

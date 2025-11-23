@@ -13,7 +13,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.* // 모든 아이콘 사용
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -37,7 +37,7 @@ import java.text.NumberFormat
 import java.util.Calendar
 import java.util.Locale
 
-// --- 데이터 모델 (UI용) ---
+// --- 데이터 모델 ---
 data class CategoryExpense(
     val name: String,
     val amount: Int,
@@ -60,21 +60,20 @@ fun MainScreen(
     val scrollState = rememberScrollState()
     val context = LocalContext.current
 
-    // 1. 날짜 상태 관리
     var currentYear by remember { mutableIntStateOf(Calendar.getInstance().get(Calendar.YEAR)) }
     var currentMonth by remember { mutableIntStateOf(Calendar.getInstance().get(Calendar.MONTH) + 1) }
 
-    // 2. 데이터 상태 관리
     var userProfile by remember { mutableStateOf<UserProfileResponse?>(null) }
     var transactionList by remember { mutableStateOf<List<TransactionDetail>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
 
-    // 3. 집계된 데이터 (자동 계산)
+    // type도 String?일 수 있으므로 안전하게 비교
     val totalExpense = transactionList.filter { it.type == "WITHDRAW" }.sumOf { it.amt }
 
     val dailyMap = remember(transactionList) {
         transactionList.groupBy {
-            it.date.split(".").last().toIntOrNull() ?: 0
+            // ★ 수정: date가 null일 경우 안전하게 처리 (?: "0.0")
+            (it.date ?: "0.0").split(".").last().toIntOrNull() ?: 0
         }.mapValues { (_, list) ->
             DailySummary(
                 day = 0,
@@ -86,22 +85,21 @@ fun MainScreen(
 
     val categoryStats = remember(transactionList) {
         transactionList.filter { it.type == "WITHDRAW" }
-            // ★ 핵심 수정: 영문 카테고리 코드를 한글로 변환하여 그룹화
-            .groupBy { getCategoryDisplayName(it.category) }
+            // ★ 수정: category가 null일 경우 "기타"로 처리
+            .groupBy { getCategoryDisplayName(it.category ?: "기타") }
             .map { (koreanName, list) ->
                 CategoryExpense(
                     name = koreanName,
                     amount = list.sumOf { it.amt },
-                    // 한글 이름으로 아이콘과 색상 가져오기
                     icon = getCategoryIcon(koreanName),
                     color = getCategoryColor(koreanName)
                 )
             }.sortedByDescending { it.amount }
     }
 
-    // 4. 데이터 로딩
     LaunchedEffect(currentYear, currentMonth) {
         isLoading = true
+        RetrofitClient.initToken(context)
         try {
             if (userProfile == null) {
                 val profileRes = RetrofitClient.api.getProfile()
@@ -351,7 +349,7 @@ fun CategoryRowItem(item: CategoryExpense, totalAmount: Int) {
     }
 }
 
-// ★ [신규] 영문 카테고리 -> 한글 이름 변환 함수
+// 헬퍼 함수
 fun getCategoryDisplayName(category: String): String {
     return when (category.uppercase()) {
         "FOOD" -> "식비"
@@ -363,11 +361,10 @@ fun getCategoryDisplayName(category: String): String {
         "TRANSFER" -> "이체"
         "MART", "CONVENIENCE", "STORE" -> "편의점/마트"
         "ETC", "OTHERS" -> "기타"
-        else -> category // 매핑 안 되면 원래 값 사용
+        else -> category
     }
 }
 
-// ★ 카테고리 매핑 헬퍼 함수 (한글 기준)
 fun getCategoryIcon(category: String): ImageVector {
     return when (category) {
         "식비" -> Icons.Default.Restaurant
