@@ -13,7 +13,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.* // 모든 아이콘 사용
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -25,7 +25,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.myapp.R
@@ -37,71 +36,59 @@ import java.text.NumberFormat
 import java.util.Calendar
 import java.util.Locale
 
-// --- 데이터 모델 (UI용) ---
-data class CategoryExpense(
-    val name: String,
-    val amount: Int,
-    val icon: ImageVector,
-    val color: Color
-)
-
-data class DailySummary(
-    val day: Int,
-    val income: Int,
-    val expense: Int
-)
+// --- 데이터 모델 ---
+data class CategoryExpense(val name: String, val amount: Int, val icon: ImageVector, val color: Color)
+data class DailySummary(val day: Int, val income: Int, val expense: Int)
 
 private var hasShownPopupInSession = false
 
 @Composable
-fun MainScreen(
-    onNavigateToGroup: () -> Unit = {}
-) {
+fun MainScreen(onNavigateToGroup: () -> Unit = {}) {
     val scrollState = rememberScrollState()
     val context = LocalContext.current
 
-    // 1. 날짜 상태 관리
     var currentYear by remember { mutableIntStateOf(Calendar.getInstance().get(Calendar.YEAR)) }
     var currentMonth by remember { mutableIntStateOf(Calendar.getInstance().get(Calendar.MONTH) + 1) }
 
-    // 2. 데이터 상태 관리
     var userProfile by remember { mutableStateOf<UserProfileResponse?>(null) }
     var transactionList by remember { mutableStateOf<List<TransactionDetail>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
 
-    // 3. 집계된 데이터 (자동 계산)
-    val totalExpense = transactionList.filter { it.type == "WITHDRAW" }.sumOf { it.amt }
+    // ★ 수정: amt가 null이면 0으로 처리 (?: 0) -> 에러 해결
+    val totalExpense = transactionList.filter { it.type == "WITHDRAW" }.sumOf { it.amt ?: 0 }
 
     val dailyMap = remember(transactionList) {
         transactionList.groupBy {
-            it.date.split(".").last().toIntOrNull() ?: 0
+            // ★ 수정: date가 null이면 "0.0"으로 처리
+            (it.date ?: "0.0").split(".").last().toIntOrNull() ?: 0
         }.mapValues { (_, list) ->
             DailySummary(
                 day = 0,
-                income = list.filter { it.type == "DEPOSIT" }.sumOf { it.amt },
-                expense = list.filter { it.type == "WITHDRAW" }.sumOf { it.amt }
+                // ★ 수정: amt가 null이면 0으로 처리
+                income = list.filter { it.type == "DEPOSIT" }.sumOf { it.amt ?: 0 },
+                expense = list.filter { it.type == "WITHDRAW" }.sumOf { it.amt ?: 0 }
             )
         }
     }
 
     val categoryStats = remember(transactionList) {
         transactionList.filter { it.type == "WITHDRAW" }
-            // ★ 핵심 수정: 영문 카테고리 코드를 한글로 변환하여 그룹화
-            .groupBy { getCategoryDisplayName(it.category) }
+            // ★ 수정: category가 null이면 "기타"로 처리
+            .groupBy { getCategoryDisplayName(it.category ?: "기타") }
             .map { (koreanName, list) ->
                 CategoryExpense(
                     name = koreanName,
-                    amount = list.sumOf { it.amt },
-                    // 한글 이름으로 아이콘과 색상 가져오기
+                    // ★ 수정: amt가 null이면 0으로 처리
+                    amount = list.sumOf { it.amt ?: 0 },
                     icon = getCategoryIcon(koreanName),
                     color = getCategoryColor(koreanName)
                 )
             }.sortedByDescending { it.amount }
     }
 
-    // 4. 데이터 로딩
     LaunchedEffect(currentYear, currentMonth) {
         isLoading = true
+        RetrofitClient.initToken(context)
         try {
             if (userProfile == null) {
                 val profileRes = RetrofitClient.api.getProfile()
@@ -111,6 +98,7 @@ fun MainScreen(
             val dateStr = String.format("%04d%02d", currentYear, currentMonth)
             val transRes = RetrofitClient.api.getTransactions(date = dateStr)
             if (transRes.isSuccessful) {
+                // ★ 수정: content가 null이면 빈 리스트
                 transactionList = transRes.body()?.content ?: emptyList()
             }
         } catch (e: Exception) {
@@ -143,6 +131,7 @@ fun MainScreen(
             Image(painter = painterResource(id = R.drawable.blue_logo), contentDescription = "App Logo", modifier = Modifier.height(24.dp))
         }
 
+        // ★ 수정: 닉네임이 null이면 "사용자" 출력
         TopSection(
             userName = userProfile?.nick ?: "사용자",
             totalExpense = totalExpense
@@ -153,21 +142,13 @@ fun MainScreen(
         MonthSelector(
             year = currentYear,
             month = currentMonth,
-            onPrevClick = {
-                if (currentMonth == 1) { currentYear--; currentMonth = 12 } else { currentMonth-- }
-            },
-            onNextClick = {
-                if (currentMonth == 12) { currentYear++; currentMonth = 1 } else { currentMonth++ }
-            }
+            onPrevClick = { if (currentMonth == 1) { currentYear--; currentMonth = 12 } else { currentMonth-- } },
+            onNextClick = { if (currentMonth == 12) { currentYear++; currentMonth = 1 } else { currentMonth++ } }
         )
 
         Spacer(modifier = Modifier.height(20.dp))
 
-        CalendarSection(
-            year = currentYear,
-            month = currentMonth,
-            dailyData = dailyMap
-        )
+        CalendarSection(year = currentYear, month = currentMonth, dailyData = dailyMap)
 
         Spacer(modifier = Modifier.height(30.dp))
 
@@ -209,58 +190,31 @@ fun MainScreen(
     }
 }
 
-// --- 컴포넌트 구현 ---
-
+// --- 컴포넌트 (기존 유지) ---
 @Composable
 fun CalendarSection(year: Int, month: Int, dailyData: Map<Int, DailySummary>) {
-    val calendar = Calendar.getInstance().apply {
-        set(year, month - 1, 1)
-    }
+    val calendar = Calendar.getInstance().apply { set(year, month - 1, 1) }
     val daysInMonth = calendar.getActualMaximum(Calendar.DAY_OF_MONTH)
     val firstDayOfWeek = calendar.get(Calendar.DAY_OF_WEEK)
-
     val blankDays = firstDayOfWeek - 1
 
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp)
-    ) {
+    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
             listOf("일", "월", "화", "수", "목", "금", "토").forEachIndexed { index, day ->
-                Text(
-                    text = day,
-                    fontSize = 14.sp,
-                    color = if (index == 0) Color.Red else if (index == 6) Color.Blue else Color.Gray,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.weight(1f),
-                    textAlign = TextAlign.Center
-                )
+                Text(text = day, fontSize = 14.sp, color = if (index == 0) Color.Red else if (index == 6) Color.Blue else Color.Gray, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f), textAlign = TextAlign.Center)
             }
         }
-
         Spacer(modifier = Modifier.height(10.dp))
-
         val totalCells = blankDays + daysInMonth
         val rows = (totalCells / 7) + if (totalCells % 7 == 0) 0 else 1
-
         for (row in 0 until rows) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-                horizontalArrangement = Arrangement.SpaceAround
-            ) {
+            Row(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalArrangement = Arrangement.SpaceAround) {
                 for (col in 0 until 7) {
                     val cellIndex = (row * 7) + col
                     val dayNumber = cellIndex - blankDays + 1
-
                     if (dayNumber in 1..daysInMonth) {
                         val summary = dailyData[dayNumber]
-                        DayCell(
-                            day = dayNumber,
-                            income = summary?.income ?: 0,
-                            expense = summary?.expense ?: 0,
-                            modifier = Modifier.weight(1f)
-                        )
+                        DayCell(day = dayNumber, income = summary?.income ?: 0, expense = summary?.expense ?: 0, modifier = Modifier.weight(1f))
                     } else {
                         Spacer(modifier = Modifier.weight(1f))
                     }
@@ -272,39 +226,19 @@ fun CalendarSection(year: Int, month: Int, dailyData: Map<Int, DailySummary>) {
 
 @Composable
 fun DayCell(day: Int, income: Int, expense: Int, modifier: Modifier = Modifier) {
-    Column(
-        modifier = modifier.heightIn(min = 60.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
+    Column(modifier = modifier.heightIn(min = 60.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Text(text = "$day", fontSize = 16.sp, color = Color.Black, fontWeight = FontWeight.Medium)
-        if (income > 0) {
-            Text(text = "+${formatMoney(income)}", fontSize = 10.sp, color = Color.Red, fontWeight = FontWeight.Bold, maxLines = 1)
-        }
-        if (expense > 0) {
-            Text(text = "-${formatMoney(expense)}", fontSize = 10.sp, color = Color.Blue, fontWeight = FontWeight.Bold, maxLines = 1)
-        }
+        if (income > 0) Text(text = "+${formatMoney(income)}", fontSize = 10.sp, color = Color.Red, fontWeight = FontWeight.Bold, maxLines = 1)
+        if (expense > 0) Text(text = "-${formatMoney(expense)}", fontSize = 10.sp, color = Color.Blue, fontWeight = FontWeight.Bold, maxLines = 1)
     }
 }
 
 @Composable
 fun MonthSelector(year: Int, month: Int, onPrevClick: () -> Unit, onNextClick: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 24.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .background(Color(0xFFFFFFFF))
-            .padding(16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        IconButton(onClick = onPrevClick) {
-            Text("◀", fontSize = 18.sp, color = Color.Gray)
-        }
+    Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp).clip(RoundedCornerShape(12.dp)).background(Color(0xFFFFFFFF)).padding(16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+        IconButton(onClick = onPrevClick) { Text("◀", fontSize = 18.sp, color = Color.Gray) }
         Text(text = "$year. $month", fontSize = 20.sp, fontWeight = FontWeight.Bold)
-        IconButton(onClick = onNextClick) {
-            Text("▶", fontSize = 18.sp, color = Color.Gray)
-        }
+        IconButton(onClick = onNextClick) { Text("▶", fontSize = 18.sp, color = Color.Gray) }
     }
 }
 
@@ -328,18 +262,8 @@ fun TopSection(userName: String, totalExpense: Int) {
 fun CategoryRowItem(item: CategoryExpense, totalAmount: Int) {
     val percent = if (totalAmount > 0) (item.amount.toDouble() / totalAmount * 100).toInt() else 0
     val formattedAmount = NumberFormat.getNumberInstance(Locale.KOREA).format(item.amount)
-
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Box(
-            modifier = Modifier
-                .size(40.dp)
-                .clip(CircleShape)
-                .background(item.color.copy(alpha = 0.2f)),
-            contentAlignment = Alignment.Center
-        ) {
+    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Box(modifier = Modifier.size(40.dp).clip(CircleShape).background(item.color.copy(alpha = 0.2f)), contentAlignment = Alignment.Center) {
             Icon(imageVector = item.icon, contentDescription = item.name, tint = item.color, modifier = Modifier.size(24.dp))
         }
         Spacer(modifier = Modifier.width(16.dp))
@@ -351,11 +275,10 @@ fun CategoryRowItem(item: CategoryExpense, totalAmount: Int) {
     }
 }
 
-// ★ [신규] 영문 카테고리 -> 한글 이름 변환 함수
 fun getCategoryDisplayName(category: String): String {
     return when (category.uppercase()) {
         "FOOD" -> "식비"
-        "TRANSPORT", "TRAFFIC" -> "교통"
+        "TRANSPORT" -> "교통"
         "SHOPPING" -> "쇼핑"
         "HEALTH", "MEDICAL" -> "의료/건강"
         "CULTURE" -> "문화/여가"
@@ -363,11 +286,10 @@ fun getCategoryDisplayName(category: String): String {
         "TRANSFER" -> "이체"
         "MART", "CONVENIENCE", "STORE" -> "편의점/마트"
         "ETC", "OTHERS" -> "기타"
-        else -> category // 매핑 안 되면 원래 값 사용
+        else -> category
     }
 }
 
-// ★ 카테고리 매핑 헬퍼 함수 (한글 기준)
 fun getCategoryIcon(category: String): ImageVector {
     return when (category) {
         "식비" -> Icons.Default.Restaurant

@@ -44,34 +44,31 @@ data class CommunityPost(
 fun CommunityScreen(
     onPostClick: (Int) -> Unit
 ) {
-    // ★ 서버 데이터 상태
     var posts by remember { mutableStateOf<List<CommunityPost>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     var showWriteDialog by remember { mutableStateOf(false) }
 
     val coroutineScope = rememberCoroutineScope()
-    val context = LocalContext.current // ★ Toast 및 토큰용 Context
+    val context = LocalContext.current
 
-    // 데이터 로딩 함수
     fun loadPosts() {
         coroutineScope.launch {
             isLoading = true
             try {
                 val response = RetrofitClient.api.getPosts()
                 if (response.isSuccessful && response.body() != null) {
-                    // API 데이터 -> UI 데이터 변환
                     posts = response.body()!!.map { apiPost ->
                         CommunityPost(
                             id = apiPost.id,
                             title = apiPost.title,
+                            // ★ 수정: null일 경우 빈 문자열 처리
                             content = apiPost.content ?: "",
-                            author = apiPost.writer,
+                            // ★ 수정: writer가 null일 경우 "익명" 처리
+                            author = apiPost.writer ?: "익명",
                             group = "핀메이트",
                             date = apiPost.createdAt.take(10)
                         )
                     }
-                } else {
-                    // 목록 로드 실패 시 조용히 넘어가거나 로그
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -81,9 +78,7 @@ fun CommunityScreen(
         }
     }
 
-    // 초기 로딩
     LaunchedEffect(Unit) {
-        // ★ [중요] 화면 진입 시 저장된 토큰을 불러와서 세팅함
         RetrofitClient.initToken(context)
         loadPosts()
     }
@@ -128,7 +123,6 @@ fun CommunityScreen(
         WritePostDialog(
             onDismiss = { showWriteDialog = false },
             onConfirm = { title, content ->
-                // ★ 글 작성 API 호출
                 coroutineScope.launch {
                     try {
                         val response = RetrofitClient.api.createPost(CreatePostRequest(title, content))
@@ -136,9 +130,8 @@ fun CommunityScreen(
                         if (response.isSuccessful) {
                             Toast.makeText(context, "글이 등록되었습니다.", Toast.LENGTH_SHORT).show()
                             showWriteDialog = false
-                            loadPosts() // 작성 후 목록 새로고침
+                            loadPosts()
                         } else {
-                            // ★ 에러 원인 출력 (예: 401 Unauthorized 등)
                             val errorMsg = response.errorBody()?.string() ?: "알 수 없는 오류"
                             Toast.makeText(context, "작성 실패(${response.code()}): $errorMsg", Toast.LENGTH_LONG).show()
                         }
